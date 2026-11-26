@@ -1,6 +1,6 @@
-# Diagnóstico — Glia V22
+# Diagnóstico — Glia V23
 
-A V22 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
+A V23 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
 O fluxo é: microfone → `SpeechRecognizer` do sistema → `CommandParser`/`CommandEngine`
 → voz neural VITS/Piper pt-BR feminina embarcada → `AudioTrack`.
 

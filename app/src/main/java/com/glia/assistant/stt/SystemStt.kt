@@ -17,7 +17,7 @@ import java.util.Locale
  * sistema termina a captação, [onError] em caso de falha e [onPartial] com o
  * texto provisório. O serviço decide quando reiniciar a escuta.
  */
-class SystemStt(context: Context) {
+class SystemStt(private val context: Context) {
 
     interface Listener {
         fun onReady() {}
@@ -30,19 +30,26 @@ class SystemStt(context: Context) {
     private class Session(val id: Int, val listener: Listener)
 
     private val available = SpeechRecognizer.isRecognitionAvailable(context)
-    private val recognizer: SpeechRecognizer? = if (available) {
+    private var recognizer: SpeechRecognizer? = newRecognizer()
+
+    private fun newRecognizer(): SpeechRecognizer? = if (available) {
         SpeechRecognizer.createSpeechRecognizer(context)
     } else {
         null
     }
 
-    private val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-    }
+    /**
+     * Alguns fabricantes devolvem ERROR_CLIENT quando EXTRA_PREFER_OFFLINE é usado
+     * sem um modelo offline instalado. A segunda tentativa remove essa exigência.
+     */
+    private fun recognitionIntent(preferOffline: Boolean): Intent =
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
 
     private var nextId = 0
     private var active: Session? = null
@@ -88,21 +95,34 @@ class SystemStt(context: Context) {
     fun isAvailable(): Boolean = available && recognizer != null
 
     @MainThread
-    fun listen(listener: Listener): Boolean {
+    fun listen(listener: Listener, preferOffline: Boolean = true): Boolean {
         val engine = recognizer ?: return false
         active = null
         val session = Session(++nextId, listener)
         active = session
         engine.setRecognitionListener(bridge)
-        engine.startListening(intent)
+        engine.startListening(recognitionIntent(preferOffline))
         return true
     }
 
     /** Cancela a escuta atual; nenhum callback da sessão antiga será entregue. */
     @MainThread
     fun cancel() {
+        if (active == null) return
         active = null
         runCatching { recognizer?.cancel() }
+    }
+
+    /** Recria o reconhecedor após ERROR_CLIENT, que o deixa em estado inválido. */
+    @MainThread
+    fun reset() {
+        active = null
+        runCatching {
+            recognizer?.setRecognitionListener(null)
+            recognizer?.cancel()
+            recognizer?.destroy()
+        }
+        recognizer = newRecognizer()
     }
 
     @MainThread
@@ -112,13 +132,15 @@ class SystemStt(context: Context) {
             recognizer?.setRecognitionListener(null)
             recognizer?.destroy()
         }
+        recognizer = null
     }
 
     private fun current(): Session? = active
 
     private fun errorMessage(code: Int): String = when (code) {
         SpeechRecognizer.ERROR_AUDIO -> "erro de áudio"
-        SpeechRecognizer.ERROR_CLIENT -> "erro interno do reconhecedor"
+        SpeechRecognizer.ERROR_CLIENT ->
+            "motor de voz do sistema indisponível; verifique Idioma e entrada"
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "permissão de microfone negada"
         SpeechRecognizer.ERROR_NETWORK -> "rede indisponível"
         SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "tempo limite de rede"

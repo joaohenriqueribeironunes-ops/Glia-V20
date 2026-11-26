@@ -1,6 +1,6 @@
 # Glia — Assistente de voz determinística (Android)
 
-Glia V22 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
+Glia V23 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
 Os comandos e a síntese de voz rodam no aparelho; o reconhecimento de fala usa o motor
 do sistema Android, com preferência por processamento offline quando disponível.
 
@@ -14,7 +14,7 @@ do sistema Android, com preferência por processamento offline quando disponíve
 - Comandos: parser puro + `CommandEngine`, sem Ternary, sem GGUF e sem tool calling JSON.
 - Notas: arquivo TSV + Base64 no armazenamento privado, com escrita atômica.
 
-## Funcionalidades (V22)
+## Funcionalidades (V23)
 
 1. **Ativação**: tile na central de controle liga/desliga o loop de wake word; dizer
    **“Olá Glia”** (também aceita “Glia”/“Clia”) aciona o assistente mesmo com a tela
@@ -42,9 +42,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_all_tests.ps1
 ```
 
 APK release: `app/build/outputs/apk/release/app-release.apk`
-(**68.237.708 bytes / ~65,1 MB**; R8, assinatura local, somente `arm64-v8a`).
+(**68.239.932 bytes / ~65,1 MB**; R8, assinatura local, somente `arm64-v8a`).
 
-Suíte oficial: **42 testes JVM**, `OK (42 tests)` + `ALL_TESTS_OK`.
+Suíte oficial: **46 testes JVM**, `OK (46 tests)` + `ALL_TESTS_OK`.
 O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por isso
 `scripts/run_all_tests.ps1` roda JUnitCore com classpath explícito. Detalhes em
 `docs/testes.md`.
@@ -85,4 +85,4 @@ ativado.
 - `docs/benchmarks.md` — versão, tamanho do APK e estado da medição.
 - `docs/loci-analise.md` — registro histórico da análise que motivou a V20; a V21
   removeu completamente o LLM/Ternary e não copiou código ou assets do Loci.
-- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V22.
+- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V23.

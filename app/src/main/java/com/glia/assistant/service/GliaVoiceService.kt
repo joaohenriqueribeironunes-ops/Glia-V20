@@ -16,7 +16,6 @@ import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.speech.SpeechRecognizer
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.glia.assistant.MainActivity
@@ -26,6 +25,7 @@ import com.glia.assistant.commands.CommandEngine
 import com.glia.assistant.commands.CommandParser
 import com.glia.assistant.commands.VoiceCommand
 import com.glia.assistant.core.GliaPrefs
+import com.glia.assistant.stt.SttRetryPolicy
 import com.glia.assistant.stt.SystemStt
 import com.glia.assistant.tts.GliaTts
 import com.glia.assistant.ui.GliaMode
@@ -126,63 +126,102 @@ class GliaVoiceService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private data class ListenOutcome(
+        val text: String?,
+        val errorCode: Int? = null,
+        val errorMessage: String? = null
+    )
+
     /**
-     * Escuta única via SpeechRecognizer. Os callbacks chegam na thread principal;
-     * o timeout garante que o loop nunca fique preso se o sistema não responder.
+     * Escuta única via SpeechRecognizer. Se o fabricante devolver ERROR_CLIENT
+     * (erro interno do microfone), recriamos o reconhecedor e repetimos a escuta
+     * sem EXTRA_PREFER_OFFLINE antes de mostrar uma falha ao usuário.
      */
-    private suspend fun listenOnce(timeoutMs: Long, mode: GliaMode): String? =
-        withContext(Dispatchers.Main) {
-            if (shuttingDown || !stt.isAvailable()) return@withContext null
-            val token = ++listenGeneration
-            val result = CompletableDeferred<String?>()
-            val started = stt.listen(object : SystemStt.Listener {
-                override fun onReady() {
-                    if (token == listenGeneration) GliaState.setAssistantStatus("ouvindo")
-                }
-
-                override fun onPartial(text: String) {
-                    if (token != listenGeneration) return
-                    if (mode == GliaMode.LISTENING) GliaState.setPartial(text)
-                    if (mode == GliaMode.IDLE && isWakeWord(text)) {
-                        triggerWake(text)
-                    }
-                }
-
-                override fun onRms(rms: Float) {
-                    if (token == listenGeneration) {
-                        GliaState.setAmplitude(((rms + 2f) / 12f).coerceIn(0f, 1f))
-                    }
-                }
-
-                override fun onResult(text: String) {
-                    if (token != listenGeneration) return
-                    listenGeneration++
-                    result.complete(text.ifBlank { null })
-                }
-
-                override fun onError(code: Int, message: String) {
-                    if (token != listenGeneration) return
-                    listenGeneration++
-                    if (code != SpeechRecognizer.ERROR_RECOGNIZER_BUSY &&
-                        code != SpeechRecognizer.ERROR_NO_MATCH &&
-                        code != SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-                    ) {
-                        GliaState.setLastError("Microfone: $message")
-                    }
-                    result.complete(null)
-                }
-            })
-            if (!started) {
-                GliaState.setLastError("Reconhecimento de fala indisponível neste aparelho")
-                return@withContext null
+    private suspend fun listenOnce(timeoutMs: Long, mode: GliaMode): String? {
+        for (attempt in 0 until SttRetryPolicy.MAX_ATTEMPTS) {
+            if (shuttingDown || !stt.isAvailable()) return null
+            val outcome = listenOnceAttempt(
+                timeoutMs,
+                mode,
+                SttRetryPolicy.preferOffline(attempt)
+            )
+            if (outcome.text != null) return outcome.text
+            val code = outcome.errorCode ?: continue
+            if (SttRetryPolicy.shouldRetryWithoutOffline(code) &&
+                attempt < SttRetryPolicy.MAX_ATTEMPTS - 1
+            ) {
+                withContext(Dispatchers.Main) { stt.reset() }
+                continue
             }
-            val answer = withTimeoutOrNull(timeoutMs) { result.await() }
-            if (token == listenGeneration && result.isActive) {
-                listenGeneration++
-                stt.cancel()
+            if (!SttRetryPolicy.isSilentError(code)) {
+                GliaState.setLastError("Microfone: ${outcome.errorMessage ?: "erro $code"}")
             }
-            answer
+            return null
         }
+        return null
+    }
+
+    private suspend fun listenOnceAttempt(
+        timeoutMs: Long,
+        mode: GliaMode,
+        preferOffline: Boolean
+    ): ListenOutcome = withContext(Dispatchers.Main) {
+        if (shuttingDown || !stt.isAvailable()) {
+            return@withContext ListenOutcome(
+                null,
+                -1,
+                "Reconhecimento de fala indisponível neste aparelho"
+            )
+        }
+        val token = ++listenGeneration
+        val result = CompletableDeferred<ListenOutcome>()
+        val started = stt.listen(object : SystemStt.Listener {
+            override fun onReady() {
+                if (token == listenGeneration) GliaState.setAssistantStatus("ouvindo")
+            }
+
+            override fun onPartial(text: String) {
+                if (token != listenGeneration) return
+                if (mode == GliaMode.LISTENING) GliaState.setPartial(text)
+                if (mode == GliaMode.IDLE && isWakeWord(text)) {
+                    triggerWake(text)
+                }
+            }
+
+            override fun onRms(rms: Float) {
+                if (token == listenGeneration) {
+                    GliaState.setAmplitude(((rms + 2f) / 12f).coerceIn(0f, 1f))
+                }
+            }
+
+            override fun onResult(text: String) {
+                if (token != listenGeneration) return
+                listenGeneration++
+                result.complete(ListenOutcome(text.ifBlank { null }))
+            }
+
+            override fun onError(code: Int, message: String) {
+                if (token != listenGeneration) return
+                listenGeneration++
+                result.complete(ListenOutcome(null, code, message))
+            }
+        }, preferOffline)
+        if (!started) {
+            listenGeneration++
+            return@withContext ListenOutcome(
+                null,
+                -1,
+                "Reconhecimento de fala indisponível neste aparelho"
+            )
+        }
+        val answer = withTimeoutOrNull(timeoutMs) { result.await() }
+            ?: ListenOutcome(null, 6, "nenhuma fala detectada")
+        if (token == listenGeneration && result.isActive) {
+            listenGeneration++
+            stt.cancel()
+        }
+        answer
+    }
 
     private fun isWakeWord(text: String): Boolean {
         val normalized = CommandParser.normalize(text)
