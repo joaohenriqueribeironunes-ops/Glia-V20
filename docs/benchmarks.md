@@ -1,12 +1,12 @@
-# Benchmarks e Metodologia — Glia V20.4
+# Benchmarks e Metodologia — Glia V20.5
 
 ## Medições realizadas
 
 | Medida | Valor |
 |---|---|
-| Versão | 2.0.4 / versionCode 20 (tag `v20`) |
+| Versão | 2.0.5 / versionCode 20 (tag `v20`) |
 | Device usado | Redmi Note 11S, `product:miel_in`, `model:2201117SI`, serial `9XCAROHMCY65I7MB` |
-| APK release (sem asset 2B) | **7.584.259 bytes (7,23 MB)** |
+| APK release (sem asset 2B) | **7.585.386 bytes (7,23 MB)** |
 | Build release | R8 + C++ release + assinatura local; `:app:assembleRelease --offline` OK |
 | Modelo único | `Ternary-Bonsai-2-4B-Q2_0.gguf` |
 | Tamanho do modelo | **1.212.103.520 bytes (1,13 GiB)** |
@@ -27,6 +27,22 @@
 4. `n_ctx = clamp(requested, 256, min(4096, budget / bytes_per_token))`.
 5. Se `budget / bytes_per_token < 256`, `nativeLoadModel` retorna `-4` e o app exibe erro claro; nunca carrega um contexto que estouraria o teto.
 6. O status do app mostra contexto real, tipo de KV (`q8_0`/`F16`) e teto em MB.
+
+## Descoberta automática do modelo (V20.5)
+
+`ModelStore.discoverModel(context, savedPath)` procura o GGUF nesta ordem:
+
+1. caminho salvo em `GliaPrefs.modelPath`;
+2. `filesDir/user-model.gguf`;
+3. `filesDir/Ternary-Bonsai-2-4B-Q2_0.gguf`;
+4. diretório externo Download específico do app (`getExternalFilesDir(DIRECTORY_DOWNLOADS)`);
+5. `/sdcard/Download`, `/sdcard/Documents` e `/storage/emulated/0/Download`.
+
+Validação: magic `GGUF`, tamanho entre 1 KiB e 3 GB. Quando o arquivo encontrado tem
+exatamente 1.212.103.520 bytes (o Q2_0 esperado), ele é copiado atomicamente para
+`filesDir/user-model.gguf` via arquivo `.part` e renomeado; outro GGUF é usado como
+fallback com aviso. O serviço chama `discoverModel` a cada carga e grava o caminho
+resolvido; as Configurações exibem o modelo descoberto e mantêm a importação via SAF.
 
 ## Como medir no device
 

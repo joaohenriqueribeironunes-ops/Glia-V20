@@ -93,7 +93,7 @@ necessários para a comunicação voz→modelo): snapshots de KV entre conversas
 ## Resultado do build
 
 `:app:assembleDebug :app:assembleRelease --offline` passou com R8 e assinatura local.
-APK release final (sem modelo embutido) = **7.584.259 bytes (7,23 MB)** na versão V20.4. O modelo 4B
+APK release final (sem modelo embutido) = **7.585.386 bytes (7,23 MB)** na versão V20.5. O modelo 4B
 é instalado separadamente em `filesDir/user-model.gguf` (1.212.103.520 bytes).
 
 ## Obtenção do modelo 4B a partir do Loci (V20.3)
@@ -133,6 +133,16 @@ implementou mecanismo equivalente, por código próprio:
 
 Isso garante que o Bonsai 4B rode abaixo do teto disponível em vez de depender de
 um contexto fixo que poderia estourar a memória em HyperOS.
+
+## Descoberta automática do modelo (V20.5)
+
+O assistente não depende mais apenas do arquivo importado manualmente:
+`ModelStore.discoverModel()` verifica o caminho salvo, `filesDir/user-model.gguf`,
+`filesDir/Ternary-Bonsai-2-4B-Q2_0.gguf`, o Download externo do app e as pastas
+públicas `Download`/`Documents`. O GGUF é validado pelo magic e copiado de forma
+atômica para o armazenamento privado quando corresponde ao 4B Q2_0 esperado.
+Isso permite que o modelo enviado por ADB para `/sdcard/Download` seja encontrado
+e carregado sem toque na UI (o HyperOS bloqueia `INJECT_EVENTS`).
 
 ## Limitações
 

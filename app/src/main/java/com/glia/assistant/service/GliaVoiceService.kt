@@ -213,8 +213,7 @@ class GliaVoiceService : Service() {
     }
 
     private fun loadModelBlocking() {
-        val source = GliaPrefs.modelSource(this)
-        val resolved = ModelStore.resolveModel(this, source)
+        val resolved = ModelStore.discoverModel(this, GliaPrefs.modelPath(this))
         val file = resolved.first
         resolved.second?.let { GliaState.setLastError(it) }
         if (file == null) {

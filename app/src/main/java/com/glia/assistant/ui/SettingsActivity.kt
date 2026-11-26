@@ -187,10 +187,10 @@ fun SettingsScreen() {
             title = "Modelo local",
             subtitle = "Ternary Bonsai 2 4B (Q2_0). Importe o .gguf e toque em recarregar."
         ) {
-            val user = ModelStore.userModelFile(ctx)
+            val discovered = remember(modelPath) { ModelStore.discoverModel(ctx, modelPath).first }
             Text(
-                if (user.isFile) {
-                    "Modelo 4B: ${user.length() / (1024 * 1024)} MB"
+                if (discovered != null) {
+                    "Modelo 4B: ${discovered.length() / (1024 * 1024)} MB (${discovered.name})"
                 } else {
                     "Modelo 4B: ausente - importe Ternary-Bonsai-2-4B-Q2_0.gguf"
                 },

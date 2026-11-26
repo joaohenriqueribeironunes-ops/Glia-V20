@@ -12,10 +12,10 @@ projetado para hardware **MediaTek Helio G96 / 6GB RAM**, totalmente offline.
 - TTS via `android.speech.tts.TextToSpeech` (PT-BR), streaming por frase.
 - Wake word "Glia" via Vosk + ForegroundService + TileService (QS) + overlay transparente (MIUI).
 
-## Funcionalidades (V20.4)
+## Funcionalidades (V20.5)
 
 1. **Ativação**: Quick Settings Tile "Glia" + palavra-chave "Glia"; tile desligado = nenhum mic/serviço/modelo em background.
-2. **Modelo único 4B**: importado/validado via SAF; magic GGUF + tamanho + sha256; mmap; KV q8_0 com fallback F16; flash attention; `n_threads_batch`; contexto adaptativo 256–4096.
+2. **Modelo único 4B com descoberta automática**: o assistente procura o GGUF no caminho salvo, em `filesDir/user-model.gguf`, em `filesDir/Ternary-Bonsai-2-4B-Q2_0.gguf`, no diretório externo Download do app e em `/sdcard/Download` / `/sdcard/Documents`; valida magic GGUF + tamanho/sha256 e copia o modelo encontrado para o armazenamento privado; também mantém a importação via SAF. mmap; KV q8_0 com fallback F16; flash attention; `n_threads_batch`; contexto adaptativo 256–4096.
 3. **Rodando abaixo do teto de memória**: `GliaMemory` lê `MemAvailable` de `/proc/meminfo`, reserva **1,25 GiB** para o sistema + **256 MiB** de runtime e calcula o orçamento restante para o modelo; o JNI calcula bytes/token com `n_layer`/`n_head_kv`/`n_embd`, reduz `n_ctx` automaticamente e falha com erro claro (`-4`) se nem o contexto mínimo couber. O app mostra no status o contexto real, o tipo de KV e o teto em MB.
 4. **Tool calling**: JSON estrito validado antes de executar; hora/data/dia da semana via `java.time`; lanterna, Bluetooth e Wi-Fi.
 5. **Design**: tema roxo HyperOS-like, claro/escuro, cartões translúcidos, pílula HyperIsland, tiles de centro de controle.
@@ -28,14 +28,14 @@ $env:JAVA_HOME="C:\Program Files\Microsoft\jdk-17.0.20.101-hotspot"
 .\gradlew.bat :app:assembleRelease --offline --console=plain
 ```
 
-APK release: `app/build/outputs/apk/release/app-release.apk` (**7.584.259 bytes / 7,23 MB**; R8 + assinatura local).
+APK release: `app/build/outputs/apk/release/app-release.apk` (**7.585.386 bytes / 7,23 MB**; R8 + assinatura local).
 
 ## Modelo
 
 - Arquivo: `Ternary-Bonsai-2-4B-Q2_0.gguf`
 - Origem verificada (a mesma referida pelo Loci): `prism-ml/Ternary-Bonsai-2-4B-gguf`, commit `50ebba61be85e5be07e8083db468ace0fc1bac43`.
 - SHA-256: `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4`.
-- No app: Configurações → Importar modelo `.gguf`; o arquivo é copiado para `filesDir/user-model.gguf`.
+- No app: o assistente descobre o 4B automaticamente nos caminhos acima e copia para `filesDir/user-model.gguf`; se não encontrar, use Configurações → Importar modelo `.gguf`.
 - No device usado no desenvolvimento, o 4B foi instalado via ADB (deep link do Loci + download verificado + debug assinado com a keystore release + `run-as` + release final).
 
 ## Otimizações inspiradas no Loci (implementação própria)
