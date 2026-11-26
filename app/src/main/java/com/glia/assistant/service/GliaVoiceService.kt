@@ -25,6 +25,7 @@ import com.glia.assistant.commands.CommandEngine
 import com.glia.assistant.commands.CommandParser
 import com.glia.assistant.commands.VoiceCommand
 import com.glia.assistant.core.GliaPrefs
+import com.glia.assistant.stt.ContinuousListenPolicy
 import com.glia.assistant.stt.SttRetryPolicy
 import com.glia.assistant.stt.SystemStt
 import com.glia.assistant.tts.GliaTts
@@ -43,6 +44,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
+/**
+ * Serviço de voz com microfone contínuo: enquanto o tile estiver ligado, o
+ * reconhecimento é reiniciado imediatamente após cada fala. O microfone só é
+ * liberado quando o usuário desliga a Glia pela central de controle.
+ */
 class GliaVoiceService : Service() {
     companion object {
         private const val TAG = "GliaVoice"
@@ -58,6 +64,8 @@ class GliaVoiceService : Service() {
             private set
     }
 
+    private enum class ListeningPhase { IDLE, AWAITING_COMMAND, AWAITING_THOUGHT }
+
     private val exceptionHandler = CoroutineExceptionHandler { _, error ->
         Log.e(TAG, "Erro no serviço", error)
         GliaState.setLastError(error.message ?: "Erro interno")
@@ -70,14 +78,13 @@ class GliaVoiceService : Service() {
     private lateinit var commandEngine: CommandEngine
     private lateinit var notes: CognitiveNotesStore
 
-    private var wakeJob: Job? = null
-    private var pipelineJob: Job? = null
+    private var listenJob: Job? = null
+    private var commandJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     @Volatile private var shuttingDown = false
-    @Volatile private var wakeGeneration = 0
-    @Volatile private var pipelineGeneration = 0
     @Volatile private var listenGeneration = 0
+    @Volatile private var phase = ListeningPhase.IDLE
 
     override fun onCreate() {
         super.onCreate()
@@ -94,7 +101,7 @@ class GliaVoiceService : Service() {
             if (stt.isAvailable()) "reconhecimento do sistema" else "indisponível neste aparelho"
         )
         if (GliaPrefs.isTileActive(this)) {
-            startWakeWordLoop()
+            startContinuousListening()
         } else {
             GliaState.setAssistantStatus("desligada")
             GliaState.setMode(GliaMode.IDLE)
@@ -109,16 +116,26 @@ class GliaVoiceService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_TEST_TTS -> {
-                cancelPipeline(stopTts = true)
-                scope.launch { testTts() }
+                cancelWork(stopTts = true)
+                scope.launch {
+                    testTts()
+                    startContinuousListening()
+                }
                 return START_STICKY
             }
             ACTION_START_LISTENING -> {
-                startListening(bypassWake = true)
+                phase = ListeningPhase.AWAITING_COMMAND
+                GliaState.setMode(GliaMode.LISTENING)
+                GliaState.setAssistantStatus("ouvindo comando")
+                updateNotification("Ouvindo comando...")
+                startContinuousListening()
+                if (!GliaPrefs.isTileActive(this)) {
+                    GliaState.setAssistantStatus("ative o tile Glia para usar a voz")
+                }
                 return START_STICKY
             }
             else -> {
-                startWakeWordLoop()
+                startContinuousListening()
                 return START_STICKY
             }
         }
@@ -132,11 +149,7 @@ class GliaVoiceService : Service() {
         val errorMessage: String? = null
     )
 
-    /**
-     * Escuta única via SpeechRecognizer. Se o fabricante devolver ERROR_CLIENT
-     * (erro interno do microfone), recriamos o reconhecedor e repetimos a escuta
-     * sem EXTRA_PREFER_OFFLINE antes de mostrar uma falha ao usuário.
-     */
+    /** Escuta única. O loop externa reinicia na sequência para manter o mic ligado. */
     private suspend fun listenOnce(timeoutMs: Long, mode: GliaMode): String? {
         for (attempt in 0 until SttRetryPolicy.MAX_ATTEMPTS) {
             if (shuttingDown || !stt.isAvailable()) return null
@@ -177,13 +190,17 @@ class GliaVoiceService : Service() {
         val result = CompletableDeferred<ListenOutcome>()
         val started = stt.listen(object : SystemStt.Listener {
             override fun onReady() {
-                if (token == listenGeneration) GliaState.setAssistantStatus("ouvindo")
+                if (token == listenGeneration) {
+                    GliaState.setAssistantStatus(
+                        if (phase == ListeningPhase.IDLE) "microfone ligado" else "ouvindo comando"
+                    )
+                }
             }
 
             override fun onPartial(text: String) {
                 if (token != listenGeneration) return
                 if (mode == GliaMode.LISTENING) GliaState.setPartial(text)
-                if (mode == GliaMode.IDLE && isWakeWord(text)) {
+                if (mode == GliaMode.IDLE && !tts.isSpeaking() && isWakeWord(text)) {
                     triggerWake(text)
                 }
             }
@@ -215,7 +232,7 @@ class GliaVoiceService : Service() {
             )
         }
         val answer = withTimeoutOrNull(timeoutMs) { result.await() }
-            ?: ListenOutcome(null, 6, "nenhuma fala detectada")
+            ?: ListenOutcome(null, SttRetryPolicy.SPEECH_TIMEOUT_CODE, "nenhuma fala detectada")
         if (token == listenGeneration && result.isActive) {
             listenGeneration++
             stt.cancel()
@@ -233,85 +250,63 @@ class GliaVoiceService : Service() {
         }
     }
 
-    private fun startWakeWordLoop() {
-        if (shuttingDown || pipelineJob?.isActive == true || wakeJob?.isActive == true) return
-        wakeGeneration++
-        val generation = wakeGeneration
-        wakeJob = scope.launch {
-            wakeLock = acquireLock(wakeLock, "glia:wake")
-            GliaState.setMode(GliaMode.IDLE)
-            GliaState.setPartial("")
-            GliaState.setAssistantStatus("aguardando \"Olá Glia\"")
-            updateNotification("Diga \"Olá Glia\"")
-            var failures = 0
-            while (isActive && !shuttingDown && generation == wakeGeneration &&
-                GliaPrefs.isTileActive(this@GliaVoiceService)
-            ) {
-                val heard = listenOnce(10_000L, GliaMode.IDLE)
-                if (!isActive || generation != wakeGeneration || shuttingDown) break
-                if (heard.isNullOrBlank()) {
-                    failures++
-                    delay(if (failures > 2) 1_200L else 350L)
-                    continue
-                }
-                failures = 0
-                if (isWakeWord(heard)) {
-                    triggerWake(heard)
-                    return@launch
-                }
-                delay(200L)
+    /**
+     * Único loop de microfone. Não há janela de silêncio entre as escutas: após
+     * qualquer resultado (inclusive silêncio), a próxima começa na mesma thread.
+     */
+    private fun startContinuousListening() {
+        if (shuttingDown || !GliaPrefs.isTileActive(this) || listenJob?.isActive == true) return
+        wakeLock = acquireLock(wakeLock, "glia:mic")
+        GliaState.setMode(GliaMode.IDLE)
+        GliaState.setPartial("")
+        GliaState.setAssistantStatus("microfone ligado")
+        updateNotification("Microfone ligado — diga \"Olá Glia\"")
+        listenJob = scope.launch {
+            while (isActive && !shuttingDown && GliaPrefs.isTileActive(this@GliaVoiceService)) {
+                val mode = if (phase == ListeningPhase.IDLE) GliaMode.IDLE else GliaMode.LISTENING
+                val heard = listenOnce(ContinuousListenPolicy.LISTEN_TIMEOUT_MS, mode)
+                if (!isActive || shuttingDown) break
+                val delayMs = ContinuousListenPolicy.RESTART_DELAY_MS
+                if (delayMs > 0) delay(delayMs)
+                if (!heard.isNullOrBlank()) dispatch(heard)
             }
             releaseLock(wakeLock)
             wakeLock = null
         }
     }
 
+    /** Entrega a fala ao fluxo correto sem desligar o microfone. */
+    private fun dispatch(text: String) {
+        if (shuttingDown || ContinuousListenPolicy.ignoreWhileSpeaking(tts.isSpeaking())) return
+        when (phase) {
+            ListeningPhase.IDLE -> {
+                if (isWakeWord(text)) triggerWake(text)
+            }
+            ListeningPhase.AWAITING_COMMAND -> processCommand(text)
+            ListeningPhase.AWAITING_THOUGHT -> scope.launch { saveThought(text) }
+        }
+    }
+
     private fun triggerWake(text: String) {
         if (shuttingDown) return
-        wakeGeneration++
-        wakeJob?.cancel()
-        listenGeneration++
-        scope.launch(Dispatchers.Main) { stt.cancel() }
-        scope.launch {
-            delay(120)
-            vibrate()
-            beep()
-            bringToFront()
-            GliaState.setResponse(text)
-            startListening(bypassWake = false)
-        }
+        phase = ListeningPhase.AWAITING_COMMAND
+        vibrate()
+        beep()
+        bringToFront()
+        GliaState.setResponse(text)
+        GliaState.setMode(GliaMode.LISTENING)
+        GliaState.setAssistantStatus("ouvindo comando")
+        updateNotification("Ouvindo comando...")
     }
 
-    private fun startListening(bypassWake: Boolean) {
-        if (shuttingDown) return
-        if (bypassWake && !GliaPrefs.isTileActive(this)) {
-            GliaState.setAssistantStatus("ative o tile Glia para usar a voz")
-            return
-        }
-        wakeGeneration++
-        wakeJob?.cancel()
-        listenGeneration++
-        scope.launch(Dispatchers.Main) { stt.cancel() }
-        pipelineGeneration++
-        pipelineJob?.cancel()
-        wakeLock = acquireLock(wakeLock, "glia:command")
-        pipelineJob = scope.launch {
-            resetForCommand()
+    private fun processCommand(text: String) {
+        if (commandJob?.isActive == true) return
+        commandJob = scope.launch {
             try {
-                conversationLoop()
+                handleText(text)
             } finally {
-                if (!shuttingDown) returnToWake()
+                commandJob = null
             }
-        }
-    }
-
-    private suspend fun conversationLoop() {
-        var first = true
-        while (!shuttingDown && GliaPrefs.isTileActive(this)) {
-            val timeout = if (first) 12_000L else 8_000L
-            val text = listenOnce(timeout, GliaMode.LISTENING) ?: break
-            first = false
-            if (!handleText(text)) break
         }
     }
 
@@ -320,29 +315,24 @@ class GliaVoiceService : Service() {
         GliaState.setMode(GliaMode.THINKING)
         GliaState.setResponse("")
         if (command is VoiceCommand.StartCognitiveOffload) {
-            handleCognitiveOffload()
+            phase = ListeningPhase.AWAITING_THOUGHT
+            speakAndWait("Claro. Pode falar o que está na sua mente. Estou ouvindo.", 45_000L)
             return false
         }
         val result = commandEngine.execute(command)
+        phase = ListeningPhase.IDLE
         GliaState.setResponse(result.spoken)
         if (result.openNotes) openNotes()
         speakAndWait(result.spoken, 45_000L)
         return true
     }
 
-    private suspend fun handleCognitiveOffload() {
-        speakAndWait("Claro. Pode falar o que está na sua mente. Estou ouvindo.", 45_000L)
-        val thought = listenOnce(30_000L, GliaMode.LISTENING)
-        if (thought.isNullOrBlank()) {
-            speakAndWait(
-                "Não consegui ouvir. Quando quiser, diga de novo: quero diminuir a carga cognitiva.",
-                45_000L
-            )
-            return
-        }
-        notes.add(thought)
+    private suspend fun saveThought(text: String) {
+        phase = ListeningPhase.IDLE
+        notes.add(text)
         val confirmation = "Certo, armazenei seus pensamentos. Foi bom pensar com você."
         GliaState.setResponse(confirmation)
+        GliaState.setMode(GliaMode.THINKING)
         speakAndWait(confirmation, 45_000L)
         openNotes()
     }
@@ -366,46 +356,30 @@ class GliaVoiceService : Service() {
                 "ligar a lanterna, abrir aplicativos e guardar seus pensamentos.",
             45_000L
         )
-        GliaState.setMode(GliaMode.IDLE)
     }
 
-    private fun resetForCommand() {
-        GliaState.resetForCommand()
-        GliaState.setMode(GliaMode.LISTENING)
-        GliaState.setAssistantStatus("ouvindo")
-        updateNotification("Ouvindo...")
-    }
-
-    private fun returnToWake() {
-        scope.launch(Dispatchers.Main) { stt.cancel() }
-        GliaState.setMode(GliaMode.IDLE)
-        GliaState.setPartial("")
-        if (!shuttingDown && GliaPrefs.isTileActive(this)) startWakeWordLoop()
-    }
-
-    private fun cancelPipeline(stopTts: Boolean) {
-        pipelineGeneration++
-        wakeGeneration++
+    private fun cancelWork(stopTts: Boolean) {
         listenGeneration++
-        pipelineJob?.cancel()
-        pipelineJob = null
-        wakeJob?.cancel()
-        wakeJob = null
+        listenJob?.cancel()
+        listenJob = null
+        commandJob?.cancel()
+        commandJob = null
         scope.launch(Dispatchers.Main) { stt.cancel() }
         if (stopTts) tts.stop()
+        phase = ListeningPhase.IDLE
         GliaState.setMode(GliaMode.IDLE)
         GliaState.setPartial("")
     }
 
     private fun stopEverything() {
         shuttingDown = true
-        cancelPipeline(stopTts = true)
+        cancelWork(stopTts = true)
+        scope.launch(Dispatchers.Main) { stt.destroy() }
         releaseLock(wakeLock)
         wakeLock = null
-        GliaState.setMode(GliaMode.IDLE)
+        GliaState.setAssistantStatus("desligada")
         GliaState.setPartial("")
         GliaState.setResponse("")
-        GliaState.setAssistantStatus("desligada")
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -556,10 +530,8 @@ class GliaVoiceService : Service() {
 
     override fun onDestroy() {
         shuttingDown = true
-        releaseLock(wakeLock)
-        wakeLock = null
-        pipelineJob?.cancel()
-        wakeJob?.cancel()
+        listenJob?.cancel()
+        commandJob?.cancel()
         scope.launch(Dispatchers.Main) { stt.destroy() }
         tts.shutdown()
         serviceJob.cancel()

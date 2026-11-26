@@ -1,19 +1,19 @@
-# Benchmarks e metodologia — Glia V23
+# Benchmarks e metodologia — Glia V24
 
 ## Estado da versão
 
 | Medida | Valor |
 |---|---|
-| Versão | V23 (versionCode 23, versionName 2.2.1) |
+| Versão | V24 (versionCode 24, versionName 2.3.0) |
 | Device usado no desenvolvimento | Redmi Note 11S, `product:miel_in`, `model:2201117SI`, serial `9XCAROHMCY65I7MB` |
-| APK release | **68.239.932 bytes (~65,1 MB)** — ARM64, R8, assinatura local |
+| APK release | **68.238.688 bytes (~65,1 MB)** — ARM64, R8, assinatura local |
 | Build release | `:app:assembleRelease --offline` OK |
 | Runtime | Comandos determinísticos em Kotlin; sem LLM, sem GGUF e sem JNI próprio |
 | STT | `SpeechRecognizer` do sistema, pt-BR, com retry sem `EXTRA_PREFER_OFFLINE` em `ERROR_CLIENT`; sem Vosk embutido |
 | Voz neural | VITS/Piper `pt_BR-dii-high.onnx` (63.511.201 bytes), feminina, 22.050 Hz |
 | Runtime da voz | sherpa-onnx 1.12.40 AAR estático; `libsherpa-onnx-jni.so` ARM64 de 22.249.744 bytes |
 | Asset da voz | `glia-neural-voice.zip`, 58.800.891 bytes, 64.254.245 descomprimidos, 11 entradas |
-| Testes JVM | 46 testes, 0 falhas (JUnitCore) |
+| Testes JVM | 48 testes, 0 falhas (JUnitCore) |
 | Testes nativos | removidos junto com llama.cpp/GliaMemory |
 
 ## Comparação com V21
@@ -23,13 +23,14 @@ usando o TTS do sistema. A V22 trocou esse conjunto por:
 - modelo neural feminino pt-BR de 58.800.891 bytes (compactado);
 - runtime sherpa-onnx com biblioteca nativa de 22.249.744 bytes.
 
-O APK passou para **68.239.932 bytes**, ainda somente `arm64-v8a`. É o custo aceito
+O APK passou para **68.238.688 bytes**, ainda somente `arm64-v8a`. É o custo aceito
 para ter uma voz neural feminina dedicada e offline, em vez da voz genérica do sistema.
 
 ## Custo de processamento
 
-- O wake loop usa `SpeechRecognizer` one-shot com wake lock parcial; cada escuta tem
-  timeout e o sistema é reiniciado automaticamente pelo app. Quando o fabricante devolve
+- O microfone fica contínuo enquanto o tile estiver ligado: cada escuta tem timeout de
+  30 s e reinicia imediatamente, sem esperar nova palavra-chave, com wake lock parcial.
+  Quando o fabricante devolve
   `ERROR_CLIENT` (código 2), o app recria o reconhecedor e repete a escuta sem exigir
   modo offline; erros 5/6/8 são considerados normais e não poluem o último erro.
 - Comandos não carregam modelo de linguagem: hora/data usam `java.time`, calendário

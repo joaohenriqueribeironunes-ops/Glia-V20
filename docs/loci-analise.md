@@ -53,7 +53,7 @@ mesma fonte verificada (`prism-ml/Ternary-Bonsai-2-4B-gguf`, commit
 `50ebba61be85e5be07e8083db468ace0fc1bac43`) e instalado por ADB/debug `run-as` porque
 o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
 
-## Situação na V21/V22/V23
+## Situação na V21/V22/V23/V24
 
 - Pacote `llm/`, `GliaMemory`, `MemoryBudget`, `llama.cpp`, `CMakeLists.txt`, testes de
   GGUF/budget e configurações de inferência foram removidos.
@@ -64,4 +64,8 @@ o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
   neural feminina pt-BR Dii com sherpa-onnx: APK de 68.237.708 bytes.
 - A V23 corrigiu o `ERROR_CLIENT` do reconhecimento do sistema: `cancel()` ocioso foi
   eliminado, o reconhecedor é recriado e a escuta é repetida sem `EXTRA_PREFER_OFFLINE`.
-  APK de 68.239.932 bytes. Nenhum código ou asset do Loci foi copiado em nenhuma versão.
+  APK de 68.239.932 bytes.
+- A V24 manteve o microfone ligado enquanto o tile estiver ativo: a escuta reinicia
+  imediatamente após cada fala, sem backoff, e a palavra “Olá Glia” não precisa ser
+  repetida antes de cada comando. APK de 68.238.688 bytes. Nenhum código ou asset do
+  Loci foi copiado em nenhuma versão.

@@ -41,7 +41,8 @@ $classes = @(
     'com.glia.assistant.commands.AppMatcherTest',
     'com.glia.assistant.tts.NeuralVoiceAssetTest',
     'com.glia.assistant.tts.NeuralVoiceStoreTest',
-    'com.glia.assistant.stt.SttRetryPolicyTest'
+    'com.glia.assistant.stt.SttRetryPolicyTest',
+    'com.glia.assistant.stt.ContinuousListenPolicyTest'
 )
 
 Write-Host '== Running JVM tests (JUnitCore) =='

@@ -11,6 +11,7 @@ package com.glia.assistant.stt
  */
 object SttRetryPolicy {
     const val ERROR_CLIENT_CODE = 2
+    const val SPEECH_TIMEOUT_CODE = 6
 
     /** Código de erro do Android que justifica uma segunda tentativa. */
     fun shouldRetryWithoutOffline(errorCode: Int): Boolean = errorCode == ERROR_CLIENT_CODE

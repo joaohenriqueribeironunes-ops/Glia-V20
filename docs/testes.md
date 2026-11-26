@@ -1,10 +1,11 @@
-# Testes rigorosos — Glia V23
+# Testes rigorosos — Glia V24
 
 Objeto: validar o motor determinístico de comandos, as notas, a correspondência de
 apps e o asset da voz neural sem depender de toque na UI (HyperOS bloqueia
 `INJECT_EVENTS`) nem de device conectado. Toda a lógica crítica foi extraída para
-código puro (JVM) e é coberta por testes determinísticos. A V23 não tem LLM, Vosk,
-C++ próprio nem testes nativos; a política de retry do STT também é testada isoladamente.
+código puro (JVM) e é coberta por testes determinísticos. A V24 não tem LLM, Vosk,
+C++ próprio nem testes nativos; a política de retry e a escuta contínua do STT
+também são testadas isoladamente.
 
 ## Como executar
 
@@ -19,11 +20,11 @@ O script:
 1. compila `:app:compileDebugUnitTestKotlin --offline`;
 2. monta classpath explícito (classes de teste + classes do app + junit 4.13.2 +
    hamcrest 1.3 + kotlin-stdlib 2.0.21 + android.jar);
-3. executa `org.junit.runner.JUnitCore` com as 7 classes de teste listadas no script.
+3. executa `org.junit.runner.JUnitCore` com as 8 classes de teste listadas no script.
 
-Resultado observado: `BUILD SUCCESSFUL`, `OK (46 tests)`, `ALL_TESTS_OK`, exit 0.
+Resultado observado: `BUILD SUCCESSFUL`, `OK (48 tests)`, `ALL_TESTS_OK`, exit 0.
 
-## Suíte JVM (46 testes)
+## Suíte JVM (48 testes)
 
 | Classe | O que cobre |
 |---|---|
@@ -34,6 +35,7 @@ Resultado observado: `BUILD SUCCESSFUL`, `OK (46 tests)`, `ALL_TESTS_OK`, exit 0
 | `tts.NeuralVoiceAssetTest` | Asset embutido existe, hash e tamanho conhecidos, zip completo e seguro, `safeRelative` normaliza separadores do Windows e rejeita travessia/`..`/`:`, zip maligno; diretório exige todos os arquivos obrigatórios |
 | `tts.NeuralVoiceStoreTest` | Extração real do zip (64.254.245 bytes em 11 entradas), idempotência, hash alterado rejeitado, zip malicioso rejeitado, alvo inválido substituído, zip inexistente |
 | `stt.SttRetryPolicyTest` | `ERROR_CLIENT` (2) dispara uma segunda tentativa sem `EXTRA_PREFER_OFFLINE`; outros códigos não disparam retry; primeira tentativa prefere offline e segunda não; erros silenciosos 5/6/8 não poluem o último erro |
+| `stt.ContinuousListenPolicyTest` | Timeout de 30 s, reinício imediato (0 ms) e ignorar transcrições enquanto a Glia fala |
 
 ## Limitação conhecida
 
