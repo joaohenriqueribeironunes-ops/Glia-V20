@@ -92,8 +92,29 @@ necessários para a comunicação voz→modelo): snapshots de KV entre conversas
 
 ## Resultado do build
 
-`:app:assembleRelease --offline` passou com R8 e assinatura local; APK = 554.274.427
-bytes (528,6 MB). A otimização não aumentou perceptivelmente o APK.
+`:app:assembleDebug :app:assembleRelease --offline` passou com R8 e assinatura local.
+APK release final (sem modelo embutido) = **7.581.986 bytes (7,2 MB)**. O modelo 4B
+é instalado separadamente em `filesDir/user-model.gguf` (1.212.103.520 bytes).
+
+## Obtenção do modelo 4B a partir do Loci (V20.3)
+
+O Loci foi aberto via ADB com `loci://open_from_hf?model=prism-ml/Ternary-Bonsai-2-4B-gguf`.
+A DEX revelou o repositório HF e o arquivo `Ternary-Bonsai-2-4B-Q2_0.gguf` (commit
+`50ebba61be85e5be07e8083db468ace0fc1bac43`). O download do Loci fica em
+`/data/user/0/app.lociai.loci`, inacessível: `allowBackup=0`, app não debuggable, sem
+root e sem FILE_PROVIDER para modelos. Não foi possível ler esse arquivo por ADB.
+
+O **mesmo artefato verificado** foi obtido pela URL pública usada pelo Loci:
+- tamanho `1.212.103.520` bytes;
+- SHA-256 `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4`.
+
+Instalação no Glia sem toque na UI (INJECT_EVENTS indisponível no HyperOS):
+1. `adb push` para `/sdcard/Download/Ternary-Bonsai-2-4B-Q2_0.gguf`;
+2. APK debug assinado com a keystore release e `debuggable=true`;
+3. `run-as com.glia.assistant` copiou o arquivo para `files/user-model.gguf`;
+4. APK release com a mesma assinatura substituiu o debug preservando os dados.
+
+O modelo 2B foi removido: não há asset embutido nem seletor 2B nas configurações.
 
 ## Limitações
 

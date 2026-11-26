@@ -1,4 +1,4 @@
-package com.glia.assistant.ui
+﻿package com.glia.assistant.ui
 
 import android.content.Intent
 import android.net.Uri
@@ -100,7 +100,6 @@ fun SettingsScreen() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var modelPath by remember { mutableStateOf(GliaPrefs.modelPath(ctx) ?: "") }
-    var source by remember { mutableStateOf(GliaPrefs.modelSource(ctx)) }
     var temperature by remember { mutableFloatStateOf(GliaPrefs.temperature(ctx)) }
     var topP by remember { mutableFloatStateOf(GliaPrefs.topP(ctx)) }
     var topK by remember { mutableIntStateOf(GliaPrefs.topK(ctx)) }
@@ -137,10 +136,10 @@ fun SettingsScreen() {
                         val target = ModelStore.userModelFile(ctx)
                         ctx.contentResolver.openInputStream(it)?.use { input ->
                             part.outputStream().use { output -> input.copyTo(output) }
-                        } ?: throw IllegalStateException("Não foi possível abrir o arquivo")
+                        } ?: throw IllegalStateException("NÃ£o foi possÃ­vel abrir o arquivo")
                         if (!ModelStore.isValid(part)) {
                             part.delete()
-                            throw IllegalStateException("O arquivo selecionado não é um GGUF válido")
+                            throw IllegalStateException("O arquivo selecionado nÃ£o Ã© um GGUF vÃ¡lido")
                         }
                         if (target.exists()) target.delete()
                         if (!part.renameTo(target)) {
@@ -151,8 +150,6 @@ fun SettingsScreen() {
                     }
                     modelPath = out.absolutePath
                     GliaPrefs.setModelPath(ctx, out.absolutePath)
-                    source = ModelStore.SOURCE_USER
-                    GliaPrefs.setModelSource(ctx, source)
                     status = "Modelo 4B importado: ${out.length() / (1024 * 1024)} MB"
                     reloadModel()
                 } catch (e: Exception) {
@@ -176,7 +173,7 @@ fun SettingsScreen() {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column {
-                Text("Configurações", style = MaterialTheme.typography.headlineSmall,
+                Text("ConfiguraÃ§Ãµes", style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.primary)
                 Text("Glia V20", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -188,72 +185,14 @@ fun SettingsScreen() {
 
         SectionCard(
             title = "Modelo local",
-            subtitle = "Padrão: Ternary Bonsai 2 2B embutido no APK. Alternativa: 4B importado do dispositivo."
+            subtitle = "Ternary Bonsai 2 4B (Q2_0). Importe o .gguf e toque em recarregar."
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    modifier = Modifier.weight(1f),
-                    onClick = {
-                        source = ModelStore.SOURCE_EMBEDDED
-                        GliaPrefs.setModelSource(ctx, source)
-                        status = "Usando modelo 2B embutido. Recarregando..."
-                        reloadModel()
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (source == ModelStore.SOURCE_EMBEDDED) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        },
-                        contentColor = if (source == ModelStore.SOURCE_EMBEDDED) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                ) {
-                    Text("2B embutido")
-                }
-                Button(
-                    modifier = Modifier.weight(1f),
-                    onClick = {
-                        source = ModelStore.SOURCE_USER
-                        GliaPrefs.setModelSource(ctx, source)
-                        status = "Usando modelo importado. Recarregando..."
-                        reloadModel()
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (source == ModelStore.SOURCE_USER) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        },
-                        contentColor = if (source == ModelStore.SOURCE_USER) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                ) {
-                    Text("4B importado")
-                }
-            }
-            val embedded = ModelStore.embeddedModelFile(ctx)
-            Text(
-                if (embedded.isFile) {
-                    "2B extraído: ${embedded.length() / (1024 * 1024)} MB"
-                } else {
-                    "2B embutido: será extraído na primeira ativação"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
             val user = ModelStore.userModelFile(ctx)
             Text(
                 if (user.isFile) {
-                    "4B importado: ${user.length() / (1024 * 1024)} MB"
+                    "Modelo 4B: ${user.length() / (1024 * 1024)} MB"
                 } else {
-                    "4B importado: ausente"
+                    "Modelo 4B: ausente - importe Ternary-Bonsai-2-4B-Q2_0.gguf"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -291,11 +230,11 @@ fun SettingsScreen() {
                 format = { "${it.toInt()} tokens" }
             ) { contextSize = it.toInt(); GliaPrefs.setContextSize(ctx, contextSize) }
             PrefSlider(
-                "Threads de geração", threads.toFloat(), 2f..8f, steps = 5,
+                "Threads de geraÃ§Ã£o", threads.toFloat(), 2f..8f, steps = 5,
                 format = { it.toInt().toString() }
             ) { threads = it.toInt().coerceIn(2, 8); GliaPrefs.setThreads(ctx, threads) }
             PrefSlider(
-                "Máximo de tokens por resposta", maxTokens.toFloat(), 64f..1024f, steps = 5,
+                "MÃ¡ximo de tokens por resposta", maxTokens.toFloat(), 64f..1024f, steps = 5,
                 format = { it.toInt().toString() }
             ) { maxTokens = it.toInt(); GliaPrefs.setMaxTokens(ctx, maxTokens) }
         }
@@ -313,10 +252,10 @@ fun SettingsScreen() {
             PrefSlider("Min-P", minP, 0f..0.95f) {
                 minP = it; GliaPrefs.setMinP(ctx, it)
             }
-            PrefSlider("Penalidade de presença", presence, -2f..2f) {
+            PrefSlider("Penalidade de presenÃ§a", presence, -2f..2f) {
                 presence = it; GliaPrefs.setPresencePenalty(ctx, it)
             }
-            PrefSlider("Penalidade de repetição", repeat, 0.8f..1.5f) {
+            PrefSlider("Penalidade de repetiÃ§Ã£o", repeat, 0.8f..1.5f) {
                 repeat = it; GliaPrefs.setRepeatPenalty(ctx, it)
             }
         }
@@ -326,7 +265,7 @@ fun SettingsScreen() {
                 color = MaterialTheme.colorScheme.primary)
         }
 
-        SectionCard("Permissões críticas") {
+        SectionCard("PermissÃµes crÃ­ticas") {
             OutlinedButton(
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
@@ -340,7 +279,7 @@ fun SettingsScreen() {
                     }
                 }
             ) {
-                Text("Sobreposição de tela")
+                Text("SobreposiÃ§Ã£o de tela")
             }
             OutlinedButton(
                 modifier = Modifier.fillMaxWidth(),
@@ -352,7 +291,7 @@ fun SettingsScreen() {
                     ctx.startActivity(i)
                 }
             ) {
-                Text("Ignorar otimização de bateria (MIUI)")
+                Text("Ignorar otimizaÃ§Ã£o de bateria (MIUI)")
             }
             OutlinedButton(
                 modifier = Modifier.fillMaxWidth(),
@@ -362,7 +301,7 @@ fun SettingsScreen() {
                     ctx.startActivity(i)
                 }
             ) {
-                Text("Abrir permissões do app")
+                Text("Abrir permissÃµes do app")
             }
         }
         Spacer(Modifier.height(8.dp))

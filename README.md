@@ -1,44 +1,39 @@
 # Glia — Assistente Pessoal de Voz 100% Offline (Android)
 
 App nativo Android (Kotlin + C++/JNI) para conversas de voz fluidas e offline,
-projetado para hardware **MediaTek Helio G96 / 6GB RAM**, totalmente offline.
+projetado para **Redmi Note 11S / Helio G96 / 6 GB RAM**, totalmente offline.
 
 ## Stack
 
-- Kotlin (Android Nativo) + C++ (NDK/JNI) para processamento de audio e inferência.
-- LLM offline via `llama.cpp` (upstream, release b11556+). **Padrão embutido:**
-  `Ternary-Bonsai-2-2B-Q2_0.gguf` (~521 MiB). **Alternativa importável:**
-  `Ternary-Bonsai-2-4B-Q2_0.gguf` (PrismML, ~1.21 GB, Q2_0).
+- Kotlin (Android Nativo) + C++ (NDK/JNI) para áudio e inferência.
+- LLM offline via `llama.cpp` (upstream, b11556+). **Modelo único:** `Ternary-Bonsai-2-4B-Q2_0.gguf`
+  (PrismML, 1.212.103.520 bytes, Q2_0).
 - STT offline via Vosk (`vosk-android 0.3.75`).
 - TTS via `android.speech.tts.TextToSpeech` (PT-BR), streaming por frase.
-- Wake word "Glia" via Vosk (loop contínuo) + ForegroundService + TileService (QS) + overlay transparente (MIUI).
+- Wake word "Glia" via Vosk (loop contínuo) + ForegroundService + TileService (QS) + overlay (MIUI).
 
-## Funcionalidades (V20)
+## Funcionalidades (V20.3)
 
-1. **Ativação**: Quick Settings Tile "Glia" (desligado = nenhum microfone/serviço/modelo em background;
-   ligado = foreground service com notificação + escuta local da palavra "Glia") + palavra-chave.
-2. **Modelo (duplo)**: 2B embutido no APK como padrão (extração atômica para `filesDir`, validação
-   tamanho + magic GGUF); 4B (ou outro GGUF) importável via SAF como alternativa; seleção em
-   Configurações; mmap; KV-cache enxugado; contexto teto 4096; threads 2–8; teto de memória ~2.5 GB;
-   check de memória antes do load; mensagem clara se o arquivo estiver ausente.
-3. **Tools (LLM + JSON estrito)**: parser de tool call (JSON) validado antes de executar;
-   router de tools nativas; data/hora/dia da semana via `java.time` determinístico; lanterna,
-   Bluetooth, Wi-Fi (com stubs de status).
-4. **Design**: linguagem visual inspirada em HyperOS 2 — tema roxo com luz suave, "ilha" de status,
-   centro de controle em pastilhas, cartões translúcidos com borda luminosa, claro/escuro, animações curtas.
+1. **Ativação**: Quick Settings Tile "Glia" (desligado = nenhum microfone/serviço/modelo em
+   background; ligado = foreground service com notificação + escuta local da palavra "Glia").
+2. **Modelo 4B**: arquivo importável via SAF para `filesDir/user-model.gguf`; validação de
+   magic GGUF e tamanho; mmap; KV `q8_0` com fallback F16; flash attention; contexto teto 4096;
+   threads 2–8; headroom de memória ~1,25 GiB; mensagem clara se o arquivo estiver ausente.
+3. **Tools (LLM + JSON estrito)**: parser de tool call validado antes de executar; router nativo;
+   data/hora/dia da semana via `java.time` determinístico; lanterna, Bluetooth e Wi-Fi.
+4. **Design**: linguagem visual inspirada em HyperOS 2 — roxo, luz suave, "ilha" de status,
+   centro de controle em pastilhas, cartões translúcidos, claro/escuro, animações curtas.
 
 ## Compilar
 
-```bash
+```powershell
 cd Glia
 $env:JAVA_HOME="C:\Program Files\Microsoft\jdk-17.0.20.101-hotspot"
-$env:ANDROID_HOME="C:\Users\<user>\AppData\Local\Android\Sdk"
-.\\gradlew.bat :app:assembleRelease   # release assinada com keystore local
+.\gradlew.bat :app:assembleRelease --offline --console=plain
 ```
 
-APK release: `app/build/outputs/apk/release/app-release.apk` (**528,6 MB medidos** com o modelo 2B embutido;
-o arquivo `.gguf` não é comprimido no APK). O modelo **não** é enviado ao repositório (`.gitignore`),
-mas é incluído no APK de release.
+APK release: `app/build/outputs/apk/release/app-release.apk` (**7.581.986 bytes / 7,2 MB medidos**).
+O `.gguf` **não** entra no APK e não é versionado; precisa ser importado no app.
 
 ## Release
 
@@ -46,29 +41,28 @@ mas é incluído no APK de release.
 - Repo: `Glia-V20`
 - Assinatura: keystore local (`release.keystore` + `release.keystore.properties`, fora do git).
 
-## Modelo
+## Modelo 4B
 
-- **Padrão**: `app/src/main/assets/models/Ternary-Bonsai-2-2B-Q2_0.gguf` (546.689.504 bytes,
-  não versionado; precisa existir localmente no build). O app extrai para `filesDir/embedded-2b.gguf`.
-- **Alternativa**: Configurações → "4B importado" → Importar `.gguf` → copia para
-  `filesDir/user-model.gguf`. Se o 4B estiver ausente, o app avisa e usa o 2B embutido.
-- Q2_0 roda no upstream llama.cpp b11556+; sem links de download versionados.
+- Origem observada no Loci: `prism-ml/Ternary-Bonsai-2-4B-gguf`, arquivo
+  `Ternary-Bonsai-2-4B-Q2_0.gguf`, commit `50ebba61be85e5be07e8083db468ace0fc1bac43`.
+- SHA-256 verificado: `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4`.
+- No device: o arquivo foi copiado para `filesDir/user-model.gguf` do Glia via build debug
+  assinado com a mesma keystore + `run-as`, preservado ao reinstalar o release.
+- Importação manual: Configurações → Importar `.gguf` → Salvar → Recarregar modelo.
 
-## Otimizações de inferência (V20.2)
+## Otimizações de inferência (herdadas da análise Loci, implementação própria)
 
-O motor nativo usa KV cache `q8_0` com fallback automático para F16, flash attention,
-`n_threads`/`n_threads_batch`, mmap e medição de prefill/decode/TPS dentro do JNI.
-O limite de admissão de memória reserva ~1,25 GiB de headroom de sistema. As
-estatísticas reais aparecem na tela principal (`prefill ... · decode ... · tok/s`).
-O mapeamento com a análise estática do Loci está em `docs/loci-analise.md`.
+KV cache `q8_0` com fallback F16, flash attention, `n_threads`/`n_threads_batch`, mmap,
+`nativeCountTokens`, estatísticas nativas de prefill/decode/TPS e headroom de ~1,25 GiB.
+As estatísticas reais aparecem na tela principal (`prefill ... · decode ... · tok/s`).
+Detalhes e limites em `docs/loci-analise.md`.
 
 ## Benchmarks / limitações
 
-- Ver `docs/benchmarks.md` e `docs/loci-analise.md`.
-- Sem device no ambiente: abertura/modelo/tokens-s/RAM exigem medição em Redmi Note 11S.
+- Ver `docs/benchmarks.md`. Device conectado, mas medições de tokens/s/RAM ainda dependem de
+  execução com o tile ligado e uma frase de teste.
 - Vosk STT: modelo não embutido (instalar separadamente).
-- Bluetooth/Wi-Fi: status respeita `BLUETOOTH_CONNECT`; ligar/desligar depende das restrições do
-  HyperOS (Android 10+ pode negar a mudança de Wi-Fi; o app reporta falha honestamente).
+- BT/Wi-Fi: ligar/desligar depende das restrições do HyperOS; o app reporta falha honestamente.
 
 ## Permissões MIUI / HyperOS
 
