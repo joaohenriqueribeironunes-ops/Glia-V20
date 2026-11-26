@@ -8,6 +8,7 @@ object GliaPrefs {
 
     const val KEY_TILE_ACTIVE = "tile_active"
     const val KEY_MODEL_PATH = "model_path"
+    const val KEY_MODEL_SOURCE = "model_source"
     const val KEY_CONTEXT_SIZE = "context_size"
     const val KEY_THREADS = "threads"
     const val KEY_TEMPERATURE = "temperature"
@@ -33,6 +34,14 @@ object GliaPrefs {
 
     fun setModelPath(context: Context, path: String?) {
         prefs(context).edit().putString(KEY_MODEL_PATH, path?.takeIf { it.isNotBlank() })?.apply()
+    }
+
+    fun modelSource(context: Context): String =
+        prefs(context).getString(KEY_MODEL_SOURCE, "embedded_2b") ?: "embedded_2b"
+
+    fun setModelSource(context: Context, source: String) {
+        val value = if (source == "user_4b") "user_4b" else "embedded_2b"
+        prefs(context).edit().putString(KEY_MODEL_SOURCE, value).apply()
     }
 
     fun contextSize(context: Context): Int = prefs(context).getInt(KEY_CONTEXT_SIZE, 1024).coerceIn(512, 4096)

@@ -8,9 +8,10 @@
 | Medida | Valor |
 |---|---|
 | Versão do app | 2.0.0 (versionCode 20) |
-| Tamanho do APK release (R8 + C++ release) | **~7.2 MB** |
-| Task de build release | ~3 min (compilação nativa + minify) |
-| Modelo alvo | Ternary Bonsai 2 4B Q2_0 (~1.21 GB) |
+| Tamanho do APK release (R8 + C++ release + modelo 2B embutido) | **528,6 MB (554.273.047 bytes, medido)** |
+| Task de build release (incremental, asset já copiado) | **1 min 21 s (medido)** |
+| Modelo padrão | Ternary Bonsai 2 2B Q2_0 (546.689.504 bytes) |
+| Modelo alternativo | Ternary Bonsai 2 4B Q2_0 (~1,21 GB, importado) |
 | Quantização | Q2_0 (roda no upstream llama.cpp b11556+) |
 | Contexto máximo suportado | 262.144 tokens (teto do app: 4096) |
 | Threads configuráveis | 2–8 (default 6 no Helio G96) |
@@ -29,8 +30,8 @@
 
 - Sem device/emulador no ambiente de build: abertura, tokens/s e pico de RAM são
   **estimativas documentais**, não medições reales.
-- Primeira resposta exige carregamento mmap do GGUF (~1.21 GB Q2_0); modelo 4B em
-  cache pode aumentar latência inicial.
+- Primeira resposta exige extração única do GGUF embutido (521 MiB) para `filesDir` e mmap;
+  no modelo 4B importado (~1,21 GB Q2_0) a latência inicial é maior.
 - Mali-G57 (CPU) usado por design (kernels Q2_0 não-oficiais para Vulkan neste formato).
 
 ## Onde registrar novas medições

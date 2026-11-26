@@ -213,12 +213,12 @@ class GliaVoiceService : Service() {
     }
 
     private fun loadModelBlocking() {
-        val userPath = GliaPrefs.modelPath(this)
-        val userFile = userPath?.let { File(it) } ?: ModelStore.userModelFile(this)
-        val embedded = ModelStore.ensureModel(this)
-        val candidates = listOfNotNull(userFile, embedded).distinctBy { it.absolutePath }
-        if (candidates.isEmpty()) {
-            modelError = "Modelo .gguf nao encontrado"
+        val source = GliaPrefs.modelSource(this)
+        val resolved = ModelStore.resolveModel(this, source)
+        val file = resolved.first
+        resolved.second?.let { GliaState.setLastError(it) }
+        if (file == null) {
+            modelError = resolved.second ?: "Modelo .gguf nao encontrado"
             GliaState.setModelStatus("erro: $modelError")
             return
         }
@@ -226,32 +226,33 @@ class GliaVoiceService : Service() {
         val ctx = GliaPrefs.contextSize(this)
         val threads = GliaPrefs.threads(this)
 
-        for (file in candidates) {
-            if (!file.isFile || file.length() < 1024) continue
-            val memCheck = GliaMemory.check(this, file.length())
-            if (!memCheck.first) {
-                modelError = memCheck.second.ifBlank { "Memoria insuficiente para o modelo" }
-                GliaState.setModelStatus("erro: $modelError")
-                return
-            }
-            GliaState.setModelStatus("carregando ${file.name}...")
-            val ok = llm.loadModel(file.absolutePath, ctx, threads)
-            if (ok) {
-                modelReady = true
-                modelError = null
-                GliaPrefs.setModelPath(this, file.absolutePath)
-                GliaState.setModelStatus("pronto (${file.name}, ${file.length() / (1024 * 1024)} MB)")
-                Log.i(TAG, "Modelo carregado: ${file.absolutePath}")
-                return
-            }
-            val err = llm.lastError()
-            modelError = err.ifBlank { "falha ao carregar ${file.name}" }
-            Log.e(TAG, "Falha ao carregar ${file.absolutePath}: $err")
+        if (!file.isFile || file.length() < 1024) {
+            modelError = "Arquivo de modelo invalido: ${file.name}"
+            GliaState.setModelStatus("erro: $modelError")
+            return
+        }
+        val memCheck = GliaMemory.check(this, file.length())
+        if (!memCheck.first) {
+            modelError = memCheck.second.ifBlank { "Memoria insuficiente para o modelo" }
+            GliaState.setModelStatus("erro: $modelError")
+            return
+        }
+        GliaState.setModelStatus("carregando ${file.name}...")
+        val ok = llm.loadModel(file.absolutePath, ctx, threads)
+        if (ok) {
+            modelReady = true
+            modelError = null
+            GliaPrefs.setModelPath(this, file.absolutePath)
+            GliaState.setModelStatus("pronto (${file.name}, ${file.length() / (1024 * 1024)} MB)")
+            Log.i(TAG, "Modelo carregado: ${file.absolutePath}")
+            return
         }
 
         modelReady = false
-        val msg = modelError ?: "Nenhum modelo .gguf valido encontrado"
-        GliaState.setModelStatus("erro: $msg")
+        val err = llm.lastError()
+        modelError = err.ifBlank { "falha ao carregar ${file.name}" }
+        Log.e(TAG, "Falha ao carregar ${file.absolutePath}: $err")
+        GliaState.setModelStatus("erro: $modelError")
     }
 
     private fun initVosk(): Boolean {
