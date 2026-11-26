@@ -30,6 +30,7 @@ import com.glia.assistant.stt.TranscriptDeduper
 import com.glia.assistant.voice.VoiceCheck
 import com.glia.assistant.voice.VoiceDecision
 import com.glia.assistant.tts.GliaTts
+import com.glia.assistant.tts.OfflineVoices
 import com.glia.assistant.ui.GliaMode
 import com.glia.assistant.ui.GliaState
 import com.glia.assistant.ui.NotesActivity
@@ -60,6 +61,8 @@ class GliaVoiceService : Service() {
         const val ACTION_START_LISTENING = "com.glia.assistant.START_LISTENING"
         const val ACTION_STOP = "com.glia.assistant.STOP"
         const val ACTION_TEST_TTS = "com.glia.assistant.TEST_TTS"
+        const val ACTION_SWITCH_VOICE = "com.glia.assistant.SWITCH_VOICE"
+        const val EXTRA_VOICE_ID = "com.glia.assistant.VOICE_ID"
         private const val VOICE_REJECTED_CODE = -2
 
         @Volatile
@@ -100,7 +103,7 @@ class GliaVoiceService : Service() {
         stt = SystemStt(this)
         amplifiedMic = AmplifiedMic(this)
         voicePrint = VoicePrintStore(this)
-        tts = GliaTts(this)
+        tts = GliaTts(this, GliaPrefs.neuralVoice(this))
         commandEngine = CommandEngine(this)
         notes = CognitiveNotesStore(this)
         tts.onReady = { GliaState.setTtsStatus(tts.status()) }
@@ -123,6 +126,12 @@ class GliaVoiceService : Service() {
             ACTION_STOP -> {
                 stopEverything()
                 return START_NOT_STICKY
+            }
+            ACTION_SWITCH_VOICE -> {
+                val next = OfflineVoices.fromId(intent.getStringExtra(EXTRA_VOICE_ID))
+                tts.switchVoice(next)
+                GliaState.setTtsStatus(tts.status())
+                return START_STICKY
             }
             ACTION_TEST_TTS -> {
                 cancelWork(stopTts = true)

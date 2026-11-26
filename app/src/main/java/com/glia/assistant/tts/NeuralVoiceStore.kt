@@ -8,7 +8,7 @@ import java.util.zip.ZipFile
 /**
  * Instala a voz neural pt-BR a partir do asset do APK.
  *
- * Nada é publicado em filesDir/glia-neural-voice antes que o zip tenha hash
+ * Nada é publicado em filesDir/<dir da voz> antes que o zip tenha hash
  * válido, estrutura segura (sem path traversal) e todos os arquivos exigidos
  * pelo motor sherpa-onnx estejam presentes.
  */
@@ -17,20 +17,26 @@ object NeuralVoiceStore {
     private const val STAGING_SUFFIX = ".extract"
     private const val ZIP_PART_SUFFIX = ".part"
 
-    fun targetDir(context: Context): File = File(context.filesDir, NeuralVoiceLayout.DIR_NAME)
+    fun targetDir(
+        context: Context,
+        voice: OfflineVoice = OfflineVoices.DII
+    ): File = File(context.filesDir, voice.dirName)
 
     @Synchronized
-    fun ensureModel(context: Context): File? {
-        val target = targetDir(context)
-        if (NeuralVoiceLayout.isValidModelDir(target)) return target
+    fun ensureModel(
+        context: Context,
+        voice: OfflineVoice = OfflineVoices.DII
+    ): File? {
+        val target = targetDir(context, voice)
+        if (OfflineVoices.isValidModelDir(voice, target)) return target
 
-        val zipPart = File(context.filesDir, NeuralVoiceLayout.ASSET_NAME + ZIP_PART_SUFFIX)
+        val zipPart = File(context.filesDir, voice.assetName + ZIP_PART_SUFFIX)
         if (zipPart.exists() && !zipPart.delete()) return null
         return try {
-            context.assets.open(NeuralVoiceLayout.ASSET_NAME).use { input ->
+            context.assets.open(voice.assetName).use { input ->
                 zipPart.outputStream().use { output -> input.copyTo(output, 256 * 1024) }
             }
-            val result = extractFromZip(zipPart, target)
+            val result = extractFromZip(zipPart, target, voice)
             if (result == null) logError("Falha ao validar/extrair o asset da voz neural")
             result
         } catch (e: Exception) {
@@ -52,26 +58,30 @@ object NeuralVoiceStore {
 
     /** Validação + extração pura (sem Android), usada pelos testes rigorosos. */
     @Synchronized
-    fun extractFromZip(zipPart: File, target: File): File? {
-        if (NeuralVoiceLayout.isValidModelDir(target)) return target
+    fun extractFromZip(
+        zipPart: File,
+        target: File,
+        voice: OfflineVoice = OfflineVoices.DII
+    ): File? {
+        if (OfflineVoices.isValidModelDir(voice, target)) return target
         val staging = File(target.parentFile, target.name + STAGING_SUFFIX)
         cleanup(staging)
 
         return try {
             if (!zipPart.isFile) return null
-            if (NeuralVoiceLayout.sha256(zipPart) != NeuralVoiceLayout.ZIP_SHA256) {
+            if (OfflineVoices.sha256(zipPart) != voice.zipSha256) {
                 logError("Hash do asset da voz neural inválido")
                 cleanup(staging)
                 return null
             }
             ZipFile(zipPart).use { zip ->
-                val problem = NeuralVoiceLayout.validateZip(zip)
+                val problem = OfflineVoices.validateZip(voice, zip)
                 if (problem != null) {
                     logError("Estrutura do zip da voz neural inválida: $problem")
                     cleanup(staging)
                     return null
                 }
-                if (NeuralVoiceLayout.uncompressedBytes(zip) != NeuralVoiceLayout.EXPECTED_UNCOMPRESSED_BYTES) {
+                if (OfflineVoices.uncompressedBytes(zip) != voice.uncompressedBytes) {
                     logError("Tamanho descomprimido inesperado da voz neural")
                     cleanup(staging)
                     return null
@@ -80,7 +90,7 @@ object NeuralVoiceStore {
                 val entries = zip.entries()
                 while (entries.hasMoreElements()) {
                     val entry = entries.nextElement()
-                    val relative = NeuralVoiceLayout.safeRelative(entry.name)
+                    val relative = OfflineVoices.safeRelative(voice, entry.name)
                         ?: error("entrada insegura: ${entry.name}")
                     if (relative.isEmpty()) continue
                     val destination = File(staging, relative)
@@ -97,7 +107,7 @@ object NeuralVoiceStore {
                     }
                 }
             }
-            if (!NeuralVoiceLayout.isValidModelDir(staging)) {
+            if (!OfflineVoices.isValidModelDir(voice, staging)) {
                 logError("Voz neural extraída incompleta")
                 cleanup(staging)
                 return null
@@ -110,7 +120,7 @@ object NeuralVoiceStore {
                 copyTree(staging, target)
                 staging.deleteRecursively()
             }
-            if (!NeuralVoiceLayout.isValidModelDir(target)) {
+            if (!OfflineVoices.isValidModelDir(voice, target)) {
                 logError("Voz neural publicada incompleta")
                 return null
             }

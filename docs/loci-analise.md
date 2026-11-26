@@ -53,7 +53,7 @@ mesma fonte verificada (`prism-ml/Ternary-Bonsai-2-4B-gguf`, commit
 `50ebba61be85e5be07e8083db468ace0fc1bac43`) e instalado por ADB/debug `run-as` porque
 o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
 
-## Situação na V21/V22/V23/V24/V25/V26/V27/V28/V29/V30/V31
+## Situação na V21/V22/V23/V24/V25/V26/V27/V28/V29/V30/V31/V32
 
 - Pacote `llm/`, `GliaMemory`, `MemoryBudget`, `llama.cpp`, `CMakeLists.txt`, testes de
   GGUF/budget e configurações de inferência foram removidos.
@@ -99,5 +99,9 @@ o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
   desde o tile e gera janelas contínuas de 3 s com 500 ms de sobreposição, com dedupe
   de transcrições e buffer circular próprio. A interface passou a ter apenas o modo
   roxo de escuta; “pensando” e “falando” viraram texto de status. A suíte foi para
-  88 testes puros em 17 classes. APK de 94.071.620 bytes. Nenhum código ou asset do
-  Loci foi copiado em nenhuma versão.
+  88 testes puros em 17 classes. APK de 94.071.620 bytes.
+- A V32 adicionou um segundo modelo neural offline, Cadu int8 (`pt_BR-cadu-medium.onnx`,
+  18.343.859 bytes; zip de 13.840.894 bytes), selecionável em Configurações ao lado da
+  voz Dii padrão. A preferência é persistida e a troca recria o engine sem reiniciar o
+  serviço. A suíte foi para 93 testes puros em 18 classes. APK de 107.918.967 bytes.
+  Nenhum código ou asset do Loci foi copiado em nenhuma versão.

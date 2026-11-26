@@ -308,7 +308,7 @@ private fun ControlGrid(activity: MainActivity, tileActive: Boolean, noteCount: 
         ControlEntry("chat", "Falar agora", "comando direto", false, GliaAccent.Teal) {
             activity.startGlia(GliaVoiceService.ACTION_START_LISTENING)
         },
-        ControlEntry("spark", "Testar voz", "Neural Dii pt-BR", false, GliaAccent.Coral) {
+        ControlEntry("spark", "Testar voz", "Voz neural local", false, GliaAccent.Coral) {
             activity.startGlia(GliaVoiceService.ACTION_TEST_TTS)
         },
         ControlEntry("brain", "Pensamentos", "$noteCount guardados", false, GliaAccent.Lavender) {

@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -39,6 +40,8 @@ import com.glia.assistant.commands.CognitiveNotesStore
 import com.glia.assistant.core.GliaPrefs
 import com.glia.assistant.service.GliaVoiceService
 import com.glia.assistant.stt.MicGain
+import com.glia.assistant.tts.OfflineVoice
+import com.glia.assistant.tts.OfflineVoices
 import java.util.Locale
 
 class SettingsActivity : ComponentActivity() {
@@ -55,6 +58,7 @@ fun SettingsScreen(activity: SettingsActivity) {
     val sttStatus by GliaState.sttStatus.collectAsState()
     val assistantStatus by GliaState.assistantStatus.collectAsState()
     val notes = CognitiveNotesStore(ctx)
+    var selectedVoice by remember { mutableStateOf(GliaPrefs.neuralVoice(ctx)) }
     val micLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
@@ -92,15 +96,38 @@ fun SettingsScreen(activity: SettingsActivity) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        SettingsCard("Voz neural", "Voz pt-BR local, sem nuvem e com baixa carga de CPU.") {
+        SettingsCard(
+            "Voz neural",
+            "Dois modelos pt-BR locais, sem nuvem e com baixa carga de CPU."
+        ) {
             Text("Status: $ttsStatus", style = MaterialTheme.typography.bodySmall)
             Text("Microfone: $sttStatus", style = MaterialTheme.typography.bodySmall)
             Text("Assistente: $assistantStatus", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(10.dp))
+            Text("Modelo", style = MaterialTheme.typography.labelMedium)
+            OfflineVoices.ALL.forEach { voice: OfflineVoice ->
+                HyperTile(
+                    icon = { GliaGlyph("spark", MaterialTheme.colorScheme.primary, Modifier.size(18.dp)) },
+                    label = voice.label,
+                    caption = voice.description,
+                    active = selectedVoice.id == voice.id,
+                    accent = if (selectedVoice.id == voice.id) GliaAccent.Purple else GliaAccent.PurpleDeep,
+                    onClick = {
+                        GliaPrefs.setNeuralVoice(ctx, voice)
+                        selectedVoice = voice
+                        val intent = Intent(ctx, GliaVoiceService::class.java)
+                            .setAction(GliaVoiceService.ACTION_SWITCH_VOICE)
+                            .putExtra(GliaVoiceService.EXTRA_VOICE_ID, voice.id)
+                        ContextCompat.startForegroundService(ctx, intent)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(6.dp))
+            }
             HyperTile(
                 icon = { GliaGlyph("spark", MaterialTheme.colorScheme.primary, Modifier.size(18.dp)) },
                 label = "Testar voz",
-                caption = "ouça a voz neural feminina",
+                caption = "ouça a voz neural local",
                 active = false,
                 accent = GliaAccent.Teal,
                 onClick = { startService(GliaVoiceService.ACTION_TEST_TTS) },
@@ -263,9 +290,9 @@ fun SettingsScreen(activity: SettingsActivity) {
             )
         }
 
-        SettingsCard("Sobre", "Sem LLM. Voz neural feminina no aparelho.") {
+        SettingsCard("Sobre", "Sem LLM. Voz neural no aparelho.") {
             Text(
-                "A Glia usa comandos determinísticos e a voz neural pt-BR feminina Dii direto no aparelho. O reconhecimento de fala usa o motor do sistema, com preferência por processamento offline quando disponível.",
+                "A Glia usa comandos determinísticos e modelos de voz pt-BR locais (Dii e Cadu) direto no aparelho. O reconhecimento de fala usa o motor do sistema, com preferência por processamento offline quando disponível.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

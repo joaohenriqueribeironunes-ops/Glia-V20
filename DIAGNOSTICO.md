@@ -1,15 +1,17 @@
-# Diagnóstico — Glia V31
+# Diagnóstico — Glia V32
 
-A V31 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
+A V32 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
 O fluxo é: `AudioRecord` contínuo → filtro passa-alta e ganho → janelas de 3 s com
 500 ms de sobreposição via `EXTRA_AUDIO_SOURCE` → verificação opcional da voz com
 3D-Speaker CAM++ → `SpeechRecognizer` do sistema → `SecondaryCommand` →
-`CommandParser`/`CommandEngine` → voz neural VITS/Piper pt-BR feminina embarcada →
+`CommandParser`/`CommandEngine` → voz neural VITS/Piper pt-BR embarcada (Dii ou Cadu) →
 `AudioTrack`.
 
-A instalação da voz é validada por SHA-256 e estrutura antes de ser publicada em
-`filesDir/glia-neural-voice`. O modelo de impressão de voz segue o mesmo critério em
-`filesDir/glia-voiceprint`; os embeddings ficam em `filesDir/voiceprint.bin`.
+A instalação de cada voz é validada por SHA-256 e estrutura antes de ser publicada em
+`filesDir/glia-neural-voice` ou `filesDir/glia-neural-voice-cadu`. A troca em Configurações
+grava a preferência e recria o engine sem reiniciar o serviço. O modelo de impressão de
+voz segue o mesmo critério em `filesDir/glia-voiceprint`; os embeddings ficam em
+`filesDir/voiceprint.bin`.
 Se algum asset estiver ausente ou corrompido, a Glia avisa no status em vez de
 falhar silenciosamente. Não há mais detector de fala: o microfone escuta 100% do
 áudio e entrega janelas contínuas ao reconhecedor; transcrições repetidas pela
@@ -26,8 +28,11 @@ comandos reconhecidos. “Glia” sozinha, “olá” e conversas comuns são ig
 ## Verificação rápida no aparelho
 
 1. Instale o APK release e conceda microfone, calendário e notificações.
-2. Abra o app e confirme os status: assistente, voz (“Dii”) e microfone.
-3. Use “Testar voz” e confirme que a fala soa feminina e natural, sem rede.
+2. Abra o app e confirme os status: assistente, voz (“Dii” por padrão) e microfone.
+3. Use “Testar voz” e confirme que a fala soa feminina e natural, sem rede. Depois,
+   em Configurações → Voz neural, selecione “Cadu · int8” e teste novamente: o status
+   deve mostrar o novo modelo e a fala deve continuar funcionando sem conexão. Volte
+   para “Dii · feminina” e confirme que a escolha persiste após reiniciar o app.
 4. Em Configurações → Microfone, ajuste o ganho (padrão 2x). Comece em 2x e suba
    apenas se os comandos não forem ouvidos à distância.
 5. Em Configurações → Somente minha voz, grave as três frases em lugar silencioso,

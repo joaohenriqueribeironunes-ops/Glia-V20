@@ -19,13 +19,13 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Voz neural feminina pt-BR embarcada (VITS/Piper "Dii") via sherpa-onnx.
- *
- * Todo o processamento acontece no aparelho: o texto é sintetizado pelo modelo
- * ONNX e reproduzido em PCM float. Não há rede, não há TextToSpeech do sistema
- * e nenhum áudio é enviado para fora do dispositivo.
+ * Voz neural pt-BR embarcada (VITS/Piper) via sherpa-onnx, 100% no aparelho.
+ * O modelo pode ser trocado em tempo de execução sem recriar o serviço.
  */
-class GliaTts(private val context: Context) {
+class GliaTts(
+    private val context: Context,
+    initialVoice: OfflineVoice = OfflineVoices.DII
+) {
     companion object {
         private const val TAG = "GliaTts"
         private const val SPEED = 1.03f
@@ -35,7 +35,7 @@ class GliaTts(private val context: Context) {
     var onReady: (() -> Unit)? = null
     var onTtsError: ((String) -> Unit)? = null
 
-    private val initLatch = CountDownLatch(1)
+    @Volatile private var initLatch = CountDownLatch(1)
     private val executor = Executors.newSingleThreadExecutor { thread ->
         Thread(thread, "glia-neural-tts").apply { priority = Thread.NORM_PRIORITY }
     }
@@ -43,6 +43,7 @@ class GliaTts(private val context: Context) {
     private val generation = AtomicInteger(0)
     private val queued = AtomicInteger(0)
 
+    @Volatile private var voice: OfflineVoice = initialVoice
     @Volatile private var engine: OfflineTts? = null
     @Volatile private var speaking = false
     @Volatile private var failure: String? = null
@@ -50,40 +51,72 @@ class GliaTts(private val context: Context) {
     @Volatile private var activeTrack: AudioTrack? = null
 
     init {
-        executor.execute {
-            try {
-                val dir = NeuralVoiceStore.ensureModel(context)
-                    ?: throw IllegalStateException("Modelo neural não encontrado no APK")
-                val vits = OfflineTtsVitsModelConfig(
-                    model = File(dir, NeuralVoiceLayout.MODEL_NAME).absolutePath,
-                    tokens = File(dir, NeuralVoiceLayout.TOKENS_NAME).absolutePath,
-                    dataDir = File(dir, NeuralVoiceLayout.ESPEAK_DIR).absolutePath,
-                    lexicon = "",
-                    noiseScale = 0.667f,
-                    noiseScaleW = 0.8f,
-                    lengthScale = 1.0f
-                )
-                val config = OfflineTtsConfig(
-                    model = OfflineTtsModelConfig(
-                        vits = vits,
-                        numThreads = 1,
-                        debug = false,
-                        provider = "cpu"
-                    ),
-                    maxNumSentences = 1,
-                    silenceScale = 0.2f
-                )
-                engine = OfflineTts(assetManager = null, config = config)
-                try { Log.i(TAG, "Voz neural pronta: pt-BR feminina (Dii)") } catch (_: Throwable) { }
-                onReady?.invoke()
-            } catch (e: Throwable) {
-                failure = e.message ?: e.javaClass.simpleName
-                Log.w(TAG, "Falha ao carregar voz neural", e)
-                reportError("Não foi possível carregar a voz neural: $failure")
-            } finally {
-                initLatch.countDown()
+        val latch = initLatch
+        val token = generation.get()
+        loadVoice(initialVoice, token, latch)
+    }
+
+    /** Recria o engine com outro modelo offline. Fala em andamento é cancelada. */
+    fun switchVoice(next: OfflineVoice) {
+        if (shutdown || (next.id == voice.id && engine != null)) return
+        stop()
+        val token = generation.get()
+        val latch = CountDownLatch(1)
+        initLatch = latch
+        failure = null
+        executor.execute { loadVoice(next, token, latch) }
+    }
+
+    private fun loadVoice(target: OfflineVoice, token: Int, latch: CountDownLatch) {
+        var created: OfflineTts? = null
+        try {
+            if (shutdown || token != generation.get()) return
+            val dir = NeuralVoiceStore.ensureModel(context, target)
+                ?: throw IllegalStateException("Modelo neural ${target.label} não encontrado no APK")
+            created = createEngine(dir, target)
+            if (token != generation.get() || shutdown) {
+                created.release()
+                return
             }
+            engine?.let { runCatching { it.release() } }
+            engine = created
+            created = null
+            voice = target
+            failure = null
+            try { Log.i(TAG, "Voz neural pronta: ${target.label}") } catch (_: Throwable) { }
+            handler.post { onReady?.invoke() }
+        } catch (e: Throwable) {
+            if (token == generation.get()) {
+                failure = e.message ?: e.javaClass.simpleName
+                reportError("Não foi possível carregar a voz neural: $failure")
+            }
+        } finally {
+            latch.countDown()
+            created?.let { runCatching { it.release() } }
         }
+    }
+
+    private fun createEngine(dir: File, target: OfflineVoice): OfflineTts {
+        val vits = OfflineTtsVitsModelConfig(
+            model = File(dir, target.modelName).absolutePath,
+            tokens = File(dir, target.tokensName).absolutePath,
+            dataDir = File(dir, target.espeakDir).absolutePath,
+            lexicon = "",
+            noiseScale = 0.667f,
+            noiseScaleW = 0.8f,
+            lengthScale = 1.0f
+        )
+        val config = OfflineTtsConfig(
+            model = OfflineTtsModelConfig(
+                vits = vits,
+                numThreads = 1,
+                debug = false,
+                provider = "cpu"
+            ),
+            maxNumSentences = 1,
+            silenceScale = 0.2f
+        )
+        return OfflineTts(assetManager = null, config = config)
     }
 
     fun isReady(): Boolean = engine != null
@@ -92,7 +125,7 @@ class GliaTts(private val context: Context) {
     fun isSpeaking(): Boolean = speaking || queued.get() > 0
 
     fun status(): String = when {
-        engine != null -> "pronta · pt-BR feminina · Dii (offline)"
+        engine != null -> "pronta · pt-BR · ${voice.label} (offline)"
         failure != null -> "indisponível: $failure"
         else -> "carregando modelo neural…"
     }
@@ -100,11 +133,12 @@ class GliaTts(private val context: Context) {
     fun speak(text: String) {
         if (text.isBlank() || shutdown) return
         val token = generation.get()
+        val latch = initLatch
         queued.incrementAndGet()
         executor.execute {
             try {
                 if (token != generation.get() || shutdown) return@execute
-                if (!initLatch.await(READY_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                if (!latch.await(READY_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                     reportError("Tempo limite ao carregar a voz neural")
                     return@execute
                 }

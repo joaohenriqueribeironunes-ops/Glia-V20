@@ -1,6 +1,6 @@
 # Glia — Assistente de voz determinística (Android)
 
-Glia V31 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
+Glia V32 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
 Os comandos e a síntese de voz rodam no aparelho; o reconhecimento de fala usa o motor
 do sistema Android, alimentado por janelas contínuas de PCM condicionado e amplificado
 quando o fabricante aceita essa entrada, com preferência por processamento offline
@@ -13,9 +13,10 @@ tile ligado, a Glia fica em um único modo roxo ouvindo tudo.
 - Kotlin + Jetpack Compose (sem NDK, sem C++/JNI próprio).
 - STT: `android.speech.SpeechRecognizer` (`pt-BR`, `EXTRA_PREFER_OFFLINE`) com PCM
   capturado por `AudioRecord`, ganho ajustável 1x–4x e `EXTRA_AUDIO_SOURCE`; sem Vosk.
-- Voz: modelo neural **VITS/Piper pt_BR "Dii" (feminina)** com runtime sherpa-onnx
-  `1.12.40` estático (AAR local em `app/libs/`), 1 thread, taxa 1,03 e PCM float via
-  `AudioTrack`. Nada é sintetizado na nuvem.
+- Voz: modelos neurais **VITS/Piper pt_BR "Dii" (feminina, padrão)** e **"Cadu" (int8)**,
+  selecionáveis em Configurações, com runtime sherpa-onnx `1.12.40` estático (AAR local
+  em `app/libs/`), 1 thread, taxa 1,03 e PCM float via `AudioTrack`. Nada é sintetizado
+  na nuvem; a troca de modelo acontece em tempo de execução.
 - Comandos: parser puro + `CommandEngine`, sem Ternary, sem GGUF e sem tool calling JSON.
 - Notas: arquivo TSV + Base64 no armazenamento privado, com escrita atômica.
 - Impressão de voz: 3D-Speaker CAM++ (`sherpa-onnx` 1.12.40), treino com 3 amostras
@@ -23,7 +24,7 @@ tile ligado, a Glia fica em um único modo roxo ouvindo tudo.
 - Condicionamento de PCM: filtro passa-alta (~77 Hz), ganho linear até 0,85 e
   limiter suave apenas nos picos; sem dupla compressão com o AGC nativo.
 
-## Funcionalidades (V31)
+## Funcionalidades (V32)
 
 1. **Microfone contínuo, um único modo**: o tile na central de controle liga/desliga
    a assistente. Ao ligar, o `AudioRecord` é aberto uma única vez e permanece ativo
@@ -42,8 +43,9 @@ tile ligado, a Glia fica em um único modo roxo ouvindo tudo.
    falar o pensamento e ouvir: **“Certo, armazenei seus pensamentos. Foi bom pensar com você.”**
    O pensamento aparece em um bloco de notas estilizado dentro do app.
 7. **Notas estilizadas**: tela “Pensamentos” com data/hora, exclusão individual e limpeza total.
-8. **Voz neural feminina**: modelo pt-BR embarcado, com timbre mais natural que o TTS
-   do sistema e inferência local de baixo custo.
+8. **Vozes neurais locais**: Dii (feminina, alta qualidade, padrão) e Cadu (int8,
+   compacto) embarcados, com timbre mais natural que o TTS do sistema e inferência
+   local de baixo custo. Escolha em Configurações → Voz neural e use “Testar voz”.
 9. **Alcance do microfone**: ganho ajustável em Configurações (1x–4x, padrão 2x),
    filtro passa-alta para vento/manuseio, limiter suave nos picos e AGC nativo apenas
    quando o ganho é 1x — evita distorção e preserva a forma de onda da fala.
@@ -76,21 +78,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_all_tests.ps1
 ```
 
 APK release: `app/build/outputs/apk/release/app-release.apk`
-(**94.071.620 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
+(**107.918.967 bytes / ~102,9 MB**; R8, assinatura local, somente `arm64-v8a`).
 
-Suíte oficial: **88 testes JVM**, `OK (88 tests)` + `ALL_TESTS_OK`.
+Suíte oficial: **93 testes JVM**, `OK (93 tests)` + `ALL_TESTS_OK`.
 O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por isso
 `scripts/run_all_tests.ps1` roda JUnitCore com classpath explícito. Detalhes em
 `docs/testes.md`.
 
-## Voz neural embarcada
+## Vozes neurais embarcadas
 
-- Asset: `app/src/main/assets/glia-neural-voice.zip` — 58.800.891 bytes,
-  SHA-256 `813eb4e520f115bdb80337e4aa5b05d3d6999ec2e1e1541bf0137ca5ad2b7c38`.
-- 11 entradas no zip, 64.254.245 bytes descomprimidos: `pt_BR-dii-high.onnx`,
+- **Dii (padrão)**: `app/src/main/assets/glia-neural-voice.zip` — 58.800.891 bytes,
+  SHA-256 `813eb4e520f115bdb80337e4aa5b05d3d6999ec2e1e1541bf0137ca5ad2b7c38`;
+  11 entradas, 64.254.245 bytes descomprimidos, `pt_BR-dii-high.onnx` (63.511.201 bytes).
+- **Cadu (int8)**: `app/src/main/assets/glia-neural-voice-cadu.zip` — 13.840.894 bytes,
+  SHA-256 `d3839a2a95ae2300105c7d28f71e9f2d1386fcb30fca648bf955345610138da7`;
+  11 entradas, 19.087.043 bytes descomprimidos, `pt_BR-cadu-medium.onnx`
+  (18.343.859 bytes), 22.050 Hz. O `MODEL_CARD` do pacote original
+  (`csukuangfj/vits-piper-pt_BR-cadu-medium-int8`) declara o dataset
+  `OHF-Voice/voice-datasets` sob CC0 e finetuning do lessac medium; gênero e licença
+  do modelo não foram confirmados no repositório (sem README).
+- Ambos os zips usam o mesmo contrato: pasta `glia-neural-voice*/` com modelo,
   `.onnx.json`, `tokens.txt` e os arquivos essenciais de `espeak-ng-data/`.
-- `NeuralVoiceStore.ensureModel()` valida hash/estrutura/tamanho, extrai em staging e
-  publica por rename atômico; rejeita travessia de diretório e nomes absolutos.
+  `NeuralVoiceStore.ensureModel()` valida hash/estrutura/tamanho para cada voz, extrai
+  em staging e publica por rename atômico; rejeita travessia de diretório e nomes
+  absolutos. `GliaTts.switchVoice()` recria o engine sem reiniciar o serviço.
 - Runtime: `app/libs/sherpa-onnx-static-link-onnxruntime-1.12.40.aar`
   (38.120.299 bytes; `libsherpa-onnx-jni.so` ARM64 de 22.249.744 bytes).
 - A voz Dii é distribuída sob CC BY-NC-ND 4.0 (TigreGotico Lda) e o pacote sherpa
@@ -131,7 +142,7 @@ ativado.
 - O filtro “somente minha voz” depende de treino com boa iluminação sonora e do
   microfone do aparelho; rigor muito alto pode rejeitar a voz do dono. Ele não é uma
   prova de identidade e pode ser burlado por gravações.
-- O APK cresceu para ~89,7 MB por causa do modelo de voz (~25,8 MB comprimido).
+- O APK cresceu para ~102,9 MB por causa dos dois modelos de voz (~72,6 MB comprimidos).
 - Device de desenvolvimento desconectado na validação final: falta confirmar em runtime
   comandos diretos com tela bloqueada, lanterna, abertura de apps, calendário real e a taxa
   de aceitação/rejeição da impressão de voz.
@@ -143,4 +154,4 @@ ativado.
 - `docs/benchmarks.md` — versão, tamanho do APK e estado da medição.
 - `docs/loci-analise.md` — registro histórico da análise que motivou a V20; a V21
   removeu completamente o LLM/Ternary e não copiou código ou assets do Loci.
-- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V31.
+- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V32.

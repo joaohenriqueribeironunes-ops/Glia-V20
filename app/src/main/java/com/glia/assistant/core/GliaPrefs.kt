@@ -2,6 +2,8 @@ package com.glia.assistant.core
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.glia.assistant.tts.OfflineVoice
+import com.glia.assistant.tts.OfflineVoices
 
 /** Preferencias enxutas da V20.7: apenas ativacao do tile e subtitulo. */
 object GliaPrefs {
@@ -12,6 +14,7 @@ object GliaPrefs {
     const val KEY_MIC_GAIN = "mic_gain"
     const val KEY_VOICE_LOCK_ENABLED = "voice_lock_enabled"
     const val KEY_VOICE_THRESHOLD = "voice_threshold"
+    const val KEY_NEURAL_VOICE_ID = "neural_voice_id"
 
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -59,5 +62,13 @@ object GliaPrefs {
     fun setVoiceThreshold(context: Context, threshold: Float) {
         val value = com.glia.assistant.voice.VoicePrintMath.clampThreshold(threshold)
         prefs(context).edit().putFloat(KEY_VOICE_THRESHOLD, value).apply()
+    }
+
+    /** V32: modelo neural offline selecionado (Dii por padrão). */
+    fun neuralVoice(context: Context): OfflineVoice =
+        OfflineVoices.fromId(prefs(context).getString(KEY_NEURAL_VOICE_ID, OfflineVoices.DII.id))
+
+    fun setNeuralVoice(context: Context, voice: OfflineVoice) {
+        prefs(context).edit().putString(KEY_NEURAL_VOICE_ID, voice.id).apply()
     }
 }
