@@ -112,4 +112,7 @@ dependencies {
 
     implementation("androidx.core:core-ktx:1.15.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.hamcrest:hamcrest-core:1.3")
 }

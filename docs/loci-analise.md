@@ -93,7 +93,7 @@ necessários para a comunicação voz→modelo): snapshots de KV entre conversas
 ## Resultado do build
 
 `:app:assembleDebug :app:assembleRelease --offline` passou com R8 e assinatura local.
-APK release final (sem modelo embutido) = **7.585.386 bytes (7,23 MB)** na versão V20.5. O modelo 4B
+APK release final na versão V20.6 = **39.772.730 bytes (37,9 MB)**, com o modelo Vosk PT-BR embutido (o GGUF 4B continua fora do APK). O modelo 4B
 é instalado separadamente em `filesDir/user-model.gguf` (1.212.103.520 bytes).
 
 ## Obtenção do modelo 4B a partir do Loci (V20.3)
@@ -143,6 +143,13 @@ públicas `Download`/`Documents`. O GGUF é validado pelo magic e copiado de for
 atômica para o armazenamento privado quando corresponde ao 4B Q2_0 esperado.
 Isso permite que o modelo enviado por ADB para `/sdcard/Download` seja encontrado
 e carregado sem toque na UI (o HyperOS bloqueia `INJECT_EVENTS`).
+
+## Validação rigorosa (V20.6)
+
+O modelo 4B e o pipeline de voz passam por 37 testes JVM e 400.015 verificações
+nativas do cálculo de budget (mesmos vetores em Kotlin e C++). O modelo de voz Vosk
+PT-BR foi embutido no APK e é validado por hash/estrutura antes da extração atômica.
+Ver `docs/testes.md` para metodologia, resultados e a limitação do Test Executor Gradle.
 
 ## Limitações
 

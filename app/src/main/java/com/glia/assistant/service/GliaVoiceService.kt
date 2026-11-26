@@ -24,6 +24,7 @@ import com.glia.assistant.llm.ModelStore
 import com.glia.assistant.llm.TokenCallback
 import com.glia.assistant.llm.ToolCallParser
 import com.glia.assistant.llm.buildPrompt
+import com.glia.assistant.stt.VoskModelStore
 import com.glia.assistant.stt.VoskStt
 import com.glia.assistant.tts.GliaTts
 import com.glia.assistant.tools.BuiltInRouter
@@ -264,7 +265,12 @@ class GliaVoiceService : Service() {
     }
 
     private fun initVosk(): Boolean {
-        for (dir in VoskStt.defaultModelDirs(this)) {
+        val embedded = VoskModelStore.ensureModel(this)
+        val dirs = buildList {
+            if (embedded != null) add(embedded)
+            addAll(VoskStt.defaultModelDirs(this@GliaVoiceService))
+        }.distinctBy { it.absolutePath }
+        for (dir in dirs) {
             if (!dir.isDirectory) continue
             if (stt.init(dir.absolutePath)) {
                 recognizerReady = true
@@ -273,7 +279,7 @@ class GliaVoiceService : Service() {
             }
         }
         recognizerReady = false
-        GliaState.setSttStatus("modelo Vosk nao encontrado")
+        GliaState.setSttStatus("modelo Vosk indisponivel (asset ausente ou corrompido)")
         return false
     }
 

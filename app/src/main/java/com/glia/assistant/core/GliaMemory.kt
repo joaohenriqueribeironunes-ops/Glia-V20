@@ -4,24 +4,14 @@ import android.app.ActivityManager
 import android.content.Context
 import java.io.File
 
+/** Faca Android do calculo puro em [MemoryBudget]. */
 object GliaMemory {
-    /** Headroom de sistema observado em mecanismos de admissao de modelos mobile (~1,25 GiB). */
-    const val SYSTEM_HEADROOM_BYTES: Long = 1_342_177_280L
-    /** Reserva para runtime (JNI, buffers de audio, STT/TTS) fora do KV-cache. */
-    const val RUNTIME_RESERVE_BYTES: Long = 268_435_456L
-    const val MIN_AVAILABLE_FOR_MODEL: Long = SYSTEM_HEADROOM_BYTES
-    const val MIN_CONTEXT_TOKENS = 256
-    const val MAX_CONTEXT_TOKENS = 4096
-    /** Estimativa conservadora antes de o JNI medir os metadados reais do modelo. */
-    const val ESTIMATED_BYTES_PER_TOKEN = 160_000L
-
-    data class Plan(
-        val availableBytes: Long,
-        val budgetBytes: Long,
-        val contextTokens: Int,
-        val ok: Boolean,
-        val message: String
-    )
+    const val SYSTEM_HEADROOM_BYTES = MemoryBudget.SYSTEM_HEADROOM_BYTES
+    const val RUNTIME_RESERVE_BYTES = MemoryBudget.RUNTIME_RESERVE_BYTES
+    const val MIN_AVAILABLE_FOR_MODEL = MemoryBudget.SYSTEM_HEADROOM_BYTES
+    const val MIN_CONTEXT_TOKENS = MemoryBudget.MIN_CONTEXT_TOKENS
+    const val MAX_CONTEXT_TOKENS = MemoryBudget.MAX_CONTEXT_TOKENS
+    const val ESTIMATED_BYTES_PER_TOKEN = MemoryBudget.ESTIMATED_BYTES_PER_TOKEN
 
     fun availableBytes(context: Context): Long {
         var found = 0L
@@ -41,33 +31,8 @@ object GliaMemory {
         return if (am != null && runCatching { am.getMemoryInfo(info) }.isSuccess) info.availMem else 0L
     }
 
-    /**
-     * Calcula um plano que mantem o modelo abaixo do teto de memoria disponivel:
-     * MemAvailable - headroom do sistema - reserva de runtime - tamanho do arquivo.
-     * O saldo e o budget exclusivo do KV-cache; o JNI ainda reduz o contexto usando
-     * os metadados reais (n_layer, n_head_kv, n_embd).
-     */
-    fun plan(context: Context, modelSizeBytes: Long, requestedContext: Int): Plan {
-        val available = availableBytes(context)
-        if (available <= 0L) {
-            return Plan(0L, 0L, requestedContext.coerceIn(MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS),
-                true, "Memoria indisponivel para medicao; usando contexto solicitado")
-        }
-        val usable = available - SYSTEM_HEADROOM_BYTES - RUNTIME_RESERVE_BYTES
-        val budget = usable - modelSizeBytes
-        if (budget < MIN_CONTEXT_TOKENS * ESTIMATED_BYTES_PER_TOKEN) {
-            return Plan(available, budget, MIN_CONTEXT_TOKENS, false,
-                "Memoria livre (${available / 1024 / 1024} MB) insuficiente: restam " +
-                    "${(budget / 1024 / 1024).coerceAtLeast(0)} MB para KV apos reservar " +
-                    "${SYSTEM_HEADROOM_BYTES / 1024 / 1024} MB de sistema e " +
-                    "${modelSizeBytes / 1024 / 1024} MB de modelo.")
-        }
-        val estimatedFit = (budget / ESTIMATED_BYTES_PER_TOKEN).toInt()
-        val ctx = requestedContext.coerceAtMost(estimatedFit).coerceIn(MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS)
-        val note = if (ctx < requestedContext) " (contexto reduzido de $requestedContext para $ctx)" else ""
-        return Plan(available, budget, ctx, true,
-            "Budget KV ${budget / 1024 / 1024} MB; contexto $ctx$note")
-    }
+    fun plan(context: Context, modelSizeBytes: Long, requestedContext: Int): MemoryBudget.Plan =
+        MemoryBudget.planBytes(availableBytes(context), modelSizeBytes, requestedContext)
 
     fun check(context: Context, modelSizeBytes: Long): Pair<Boolean, String> {
         val result = plan(context, modelSizeBytes, 1024)

@@ -11,6 +11,7 @@
 #include <chrono>
 
 #include "llama.h"
+#include "memory_budget.h"
 
 #define LOG_TAG "GliaNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -225,22 +226,21 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeLoadModel(JNIEnv* env, jobject thi
     const int nLayer = std::max(1, llama_model_n_layer(g_model));
     const int nHeadKv = std::max(1, llama_model_n_head_kv(g_model));
     const int nEmbd = std::max(nHeadKv, llama_model_n_embd(g_model));
-    const int headDim = std::max(1, nEmbd / nHeadKv);
-    // q8_0 usa ~1,0625 bytes por elemento; F16 usa 2 bytes (K + V).
-    const double bytesPerTokenQ8 = 2.0 * nLayer * nHeadKv * headDim * 1.0625 + 512.0;
-    const int maxCtxByBudget = budgetBytes > 0
-        ? (int) std::min<long long>(4096, (long long) (budgetBytes / bytesPerTokenQ8))
-        : 4096;
+    const double bytesPerTokenQ8 = glia::kvBytesPerToken(nLayer, nHeadKv, nEmbd, true);
     const int requestedCtx = nCtx > 0 ? nCtx : 1024;
-    const int ctxSize = std::max(256, std::min(requestedCtx, maxCtxByBudget));
-    if (budgetBytes > 0 && ctxSize < requestedCtx) {
-        LOGI("Contexto reduzido de %d para %d para respeitar o teto de memoria", requestedCtx,
-             ctxSize);
-    }
-    if (budgetBytes > 0 && maxCtxByBudget < 256) {
-        set_error("Memoria insuficiente para KV q8_0 (contexto minimo 256)");
-        unload_locked();
-        return -4;
+    int ctxSize = requestedCtx;
+    if (budgetBytes > 0) {
+        if (!glia::fitsMinimum(budgetBytes, nLayer, nHeadKv, nEmbd, true)) {
+            set_error("Memoria insuficiente para KV q8_0 (contexto minimo 256)");
+            unload_locked();
+            return -4;
+        }
+        ctxSize = std::min(requestedCtx,
+                           glia::maxContextByBudget(budgetBytes, nLayer, nHeadKv, nEmbd, true));
+        if (ctxSize < requestedCtx) {
+            LOGI("Contexto reduzido de %d para %d para respeitar o teto de memoria", requestedCtx,
+                 ctxSize);
+        }
     }
 
     auto make_context = [&](bool quantized_kv) -> llama_context* {
