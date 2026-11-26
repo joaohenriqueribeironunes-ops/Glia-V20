@@ -51,6 +51,9 @@ APK release: `app/build/outputs/apk/release/app-release.apk` (~7.2 MB).
 
 - Ver `docs/benchmarks.md` e `docs/loci-analise.md`.
 - Sem device no ambiente: abertura/modelo/tokens-s/RAM exigem medição em Redmi Note 11S.
+- Vosk STT: modelo não embutido (instalar separadamente).
+- Bluetooth/Wi-Fi: status respeita `BLUETOOTH_CONNECT`; ligar/desligar depende das restrições do
+  HyperOS (Android 10+ pode negar a mudança de Wi-Fi; o app reporta falha honestamente).
 
 ## Permissões MIUI / HyperOS
 

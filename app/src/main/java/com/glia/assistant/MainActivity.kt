@@ -14,6 +14,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,8 +24,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,6 +45,7 @@ import androidx.core.content.ContextCompat
 import com.glia.assistant.service.GliaVoiceService
 import com.glia.assistant.ui.GliaMode
 import com.glia.assistant.ui.GliaState
+import com.glia.assistant.ui.GliaTheme
 import com.glia.assistant.ui.SettingsActivity
 
 class MainActivity : ComponentActivity() {
@@ -54,7 +59,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MainScreen(this) }
+        setContent { GliaTheme { MainScreen(this) } }
         val action = intent?.getStringExtra(EXTRA_ACTION)
         if (action != null) {
             startGlia(normalizeAction(action))
@@ -90,6 +95,9 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
         val missing = perms.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
@@ -120,11 +128,23 @@ fun MainScreen(activity: MainActivity) {
     Column(
         Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Top
     ) {
+        Text(
+            "Glia",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            "Assistente pessoal offline",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
         Box(
             Modifier.fillMaxWidth().height(260.dp),
             contentAlignment = Alignment.Center
@@ -133,28 +153,51 @@ fun MainScreen(activity: MainActivity) {
         }
         Text(
             text = when (mode) {
-                GliaMode.IDLE -> "Dormindo - diga \"Ei Glia\""
+                GliaMode.IDLE -> "Dormindo - diga \"Glia\""
                 GliaMode.LISTENING -> "Ouvindo..."
                 GliaMode.THINKING -> "Pensando..."
                 GliaMode.SPEAKING -> "Falando..."
             },
             style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            "Ative o tile Glia na central de controle para ouvir a palavra-chave.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(8.dp))
         if (partial.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
             Text(
                 partial,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF8A8AA6),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
         }
         if (response.isNotBlank()) {
-            Text(response, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                response,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center
+            )
         }
         Spacer(Modifier.height(12.dp))
-        StatusCard(modelStatus, ttsStatus, sttStatus, lastError, generationStats)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
+            )
+        ) {
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                StatusCard(modelStatus, ttsStatus, sttStatus, lastError, generationStats)
+            }
+        }
         Spacer(Modifier.height(12.dp))
         RowButtons(activity)
     }
@@ -168,7 +211,7 @@ fun StatusCard(
     lastError: String,
     generationStats: String
 ) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("Modelo: $modelStatus", style = MaterialTheme.typography.bodySmall)
         Text("Voz: $ttsStatus", style = MaterialTheme.typography.bodySmall)
         Text("Microfone: $sttStatus", style = MaterialTheme.typography.bodySmall)
@@ -176,7 +219,11 @@ fun StatusCard(
             Text("Geracao: $generationStats", style = MaterialTheme.typography.bodySmall)
         }
         if (lastError.isNotBlank()) {
-            Text("Erro: $lastError", style = MaterialTheme.typography.bodySmall, color = Color(0xFFFF6B6B))
+            Text(
+                "Erro: $lastError",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 }

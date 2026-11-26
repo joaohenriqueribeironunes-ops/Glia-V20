@@ -1,7 +1,15 @@
 package com.glia.assistant.tools
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
+import android.net.wifi.WifiManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -38,11 +46,24 @@ class ContextDeviceController(private val context: Context) : DeviceController {
     private var cameraManager: CameraManager? = null
     private var cameraId: String? = null
     private var torchOn = false
+    private val bluetoothAdapter: BluetoothAdapter? by lazy {
+        (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+    }
+    private val wifiManager: WifiManager? by lazy {
+        context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+    }
 
     init {
         cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
         cameraId = cameraManager?.let { runCatching { it.cameraIdList.firstOrNull() }.getOrNull() }
     }
+
+    private fun canUseBluetooth(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
 
     override fun currentTimeMillis(): Long = System.currentTimeMillis()
 
@@ -60,13 +81,43 @@ class ContextDeviceController(private val context: Context) : DeviceController {
         }
     }
 
-    override fun bluetoothOn(): Boolean? = false
+    @SuppressLint("MissingPermission")
+    override fun bluetoothOn(): Boolean? {
+        val adapter = bluetoothAdapter ?: return null
+        if (!canUseBluetooth()) return null
+        return try {
+            adapter.isEnabled
+        } catch (_: SecurityException) {
+            null
+        }
+    }
 
-    override fun setBluetooth(on: Boolean): Boolean = false
+    @SuppressLint("MissingPermission")
+    override fun setBluetooth(on: Boolean): Boolean {
+        val adapter = bluetoothAdapter ?: return false
+        if (!canUseBluetooth()) return false
+        return try {
+            if (on) adapter.enable() else adapter.disable()
+        } catch (_: SecurityException) {
+            false
+        }
+    }
 
-    override fun wifiOn(): Boolean? = false
+    @Suppress("DEPRECATION")
+    override fun wifiOn(): Boolean? = try {
+        wifiManager?.isWifiEnabled
+    } catch (_: Exception) {
+        null
+    }
 
-    override fun setWifi(on: Boolean): Boolean = false
+    @Suppress("DEPRECATION")
+    override fun setWifi(on: Boolean): Boolean = try {
+        val wm = wifiManager ?: return false
+        wm.isWifiEnabled = on
+        true
+    } catch (_: Exception) {
+        false
+    }
 }
 
 class HoraTool : GliaTool {
