@@ -28,6 +28,8 @@ static std::string g_last_error;
 static llama_model* g_model = nullptr;
 static llama_context* g_ctx = nullptr;
 static const llama_vocab* g_vocab = nullptr;
+static int g_ctx_size = 0;
+static bool g_uses_quantized_kv = false;
 
 // Estatisticas da ultima geracao (observadas pelo app via nativeLastGenerationStats).
 static int64_t g_prompt_tokens = 0;
@@ -61,6 +63,8 @@ static void unload_locked() {
     if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
     g_vocab = nullptr;
+    g_ctx_size = 0;
+    g_uses_quantized_kv = false;
     g_loaded.store(false);
 }
 
@@ -175,7 +179,8 @@ extern "C" {
 
 JNIEXPORT jint JNICALL
 Java_com_glia_assistant_llm_LlamaBridge_nativeLoadModel(JNIEnv* env, jobject thiz,
-                                                       jstring modelPath, jint nCtx, jint nThreads) {
+                                                       jstring modelPath, jint nCtx, jint nThreads,
+                                                       jlong budgetBytes) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_generating.load()) {
         set_error("Nao e possivel carregar durante geracao");
@@ -193,7 +198,8 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeLoadModel(JNIEnv* env, jobject thi
     }
     std::string pathStr(path);
     env->ReleaseStringUTFChars(modelPath, path);
-    LOGI("nativeLoadModel: %s (ctx=%d, threads=%d)", pathStr.c_str(), nCtx, nThreads);
+    LOGI("nativeLoadModel: %s (ctx=%d, threads=%d, budget=%lld MB)", pathStr.c_str(), nCtx,
+         nThreads, (long long) (budgetBytes / (1024 * 1024)));
 
     backend_init_once();
     unload_locked();
@@ -215,27 +221,49 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeLoadModel(JNIEnv* env, jobject thi
         return -2;
     }
 
-    const int ctxSize = nCtx > 0 ? nCtx : 2048;
     const int threads = nThreads > 0 ? nThreads : 4;
+    const int nLayer = std::max(1, llama_model_n_layer(g_model));
+    const int nHeadKv = std::max(1, llama_model_n_head_kv(g_model));
+    const int nEmbd = std::max(nHeadKv, llama_model_n_embd(g_model));
+    const int headDim = std::max(1, nEmbd / nHeadKv);
+    // q8_0 usa ~1,0625 bytes por elemento; F16 usa 2 bytes (K + V).
+    const double bytesPerTokenQ8 = 2.0 * nLayer * nHeadKv * headDim * 1.0625 + 512.0;
+    const int maxCtxByBudget = budgetBytes > 0
+        ? (int) std::min<long long>(4096, (long long) (budgetBytes / bytesPerTokenQ8))
+        : 4096;
+    const int requestedCtx = nCtx > 0 ? nCtx : 1024;
+    const int ctxSize = std::max(256, std::min(requestedCtx, maxCtxByBudget));
+    if (budgetBytes > 0 && ctxSize < requestedCtx) {
+        LOGI("Contexto reduzido de %d para %d para respeitar o teto de memoria", requestedCtx,
+             ctxSize);
+    }
+    if (budgetBytes > 0 && maxCtxByBudget < 256) {
+        set_error("Memoria insuficiente para KV q8_0 (contexto minimo 256)");
+        unload_locked();
+        return -4;
+    }
+
     auto make_context = [&](bool quantized_kv) -> llama_context* {
         llama_context_params cparams = llama_context_default_params();
         cparams.n_ctx = (uint32_t) ctxSize;
-        cparams.n_batch = (uint32_t) std::max(512, ctxSize);
+        // n_batch limitado evita buffer extra grande quando o contexto e ampliado.
+        cparams.n_batch = (uint32_t) std::min(2048, std::max(512, ctxSize));
         cparams.n_ubatch = 512;
         cparams.n_threads = threads;
         cparams.n_threads_batch = threads;
         cparams.offload_kqv = false;
         cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
-        // KV quantizada reduz RAM; se o backend/arquitetura recusar, cai para F16.
         cparams.type_k = quantized_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
         cparams.type_v = quantized_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
         return llama_init_from_model(g_model, cparams);
     };
 
     g_ctx = make_context(true);
+    bool using_quantized_kv = g_ctx != nullptr;
     if (!g_ctx) {
         LOGI("KV q8_0 recusada; tentando F16");
         g_ctx = make_context(false);
+        using_quantized_kv = false;
     }
     if (!g_ctx) {
         set_error("llama_init_from_model falhou (q8_0 e F16)");
@@ -243,11 +271,25 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeLoadModel(JNIEnv* env, jobject thi
         return -2;
     }
 
+    g_ctx_size = ctxSize;
+    g_uses_quantized_kv = using_quantized_kv;
     g_loaded.store(true);
     clear_error();
-    LOGI("Modelo carregado: ctx=%d threads=%d vocab=%d", ctxSize, threads,
-         llama_vocab_n_tokens(g_vocab));
+    LOGI("Modelo carregado: ctx=%d threads=%d vocab=%d kv_q8=%d bytes/token=%.0f", ctxSize,
+         threads, llama_vocab_n_tokens(g_vocab), g_uses_quantized_kv ? 1 : 0, bytesPerTokenQ8);
     return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_glia_assistant_llm_LlamaBridge_nativeContextSize(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_ctx_size;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_glia_assistant_llm_LlamaBridge_nativeUsesQuantizedKv(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_uses_quantized_kv ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

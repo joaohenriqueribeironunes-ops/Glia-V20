@@ -15,7 +15,12 @@ object LlamaBridge {
         System.loadLibrary("glia_native")
     }
 
-    @JvmStatic external fun nativeLoadModel(modelPath: String, nCtx: Int, nThreads: Int): Int
+    @JvmStatic external fun nativeLoadModel(
+        modelPath: String,
+        nCtx: Int,
+        nThreads: Int,
+        budgetBytes: Long,
+    ): Int
     @JvmStatic external fun nativeUnloadModel()
     @JvmStatic external fun nativeIsLoaded(): Boolean
     @JvmStatic external fun nativeGenerate(
@@ -34,9 +39,15 @@ object LlamaBridge {
     @JvmStatic external fun nativeGetLastError(): String?
     @JvmStatic external fun nativeLastGenerationStats(): LongArray
     @JvmStatic external fun nativeCountTokens(text: String): Int
+    @JvmStatic external fun nativeContextSize(): Int
+    @JvmStatic external fun nativeUsesQuantizedKv(): Boolean
 
-    fun loadModel(modelPath: String, contextSize: Int = 1024, threads: Int = 6): Boolean =
-        nativeLoadModel(modelPath, contextSize, threads) == 0
+    fun loadModel(
+        modelPath: String,
+        contextSize: Int = 1024,
+        threads: Int = 6,
+        budgetBytes: Long = -1L,
+    ): Boolean = nativeLoadModel(modelPath, contextSize, threads, budgetBytes) == 0
 
     fun unload() = nativeUnloadModel()
 
@@ -65,4 +76,8 @@ object LlamaBridge {
     fun lastGenerationStats(): LongArray = nativeLastGenerationStats()
 
     fun countTokens(text: String): Int = nativeCountTokens(text)
+
+    fun contextSize(): Int = nativeContextSize()
+
+    fun usesQuantizedKv(): Boolean = nativeUsesQuantizedKv()
 }

@@ -82,7 +82,7 @@ snapshots de KV/conversação e mede TPS/latência dentro do motor nativo.
 | KV `q8_0` com fallback F16 + flash attention | `make_context(quantized_kv)` usa `GGML_TYPE_Q8_0`, `LLAMA_FLASH_ATTN_TYPE_ENABLED` e recai para F16 se `llama_init_from_model` falhar | `llama_jni.cpp` |
 | Stats `prefill_ms` / `decode_ms` / `tps` | `nativeLastGenerationStats()` publica `[promptTokens, generatedTokens, prefillMs, decodeMs, tpsX100, reusedPrefixTokens]`; UI mostra `prefill ... decode ... tok/s` | `llama_jni.cpp`, `LlamaBridge.kt`, `GliaState.kt`, `GliaVoiceService.kt` |
 | `nativeCountTokens` | exposto para diagnóstico de limite de contexto | `LlamaBridge.kt` |
-| Headroom de memória ~1,25 GiB | `GliaMemory.SYSTEM_HEADROOM_BYTES = 1_342_177_280`, `needed = modelSize + headroom` | `GliaMemory.kt` |
+| Headroom de memória ~1,25 GiB | V20.4: `GliaMemory.plan()` usa `MemAvailable - 1,25 GiB - 256 MiB - modelSize`, reduz `n_ctx` e o JNI retorna `-4` se não couber | `GliaMemory.kt`, `llama_jni.cpp` |
 | mmap + KV limpo por geração | já existia; mantido | `llama_jni.cpp` |
 
 Não replicados nesta rodada (dependem de protocolo de estado mais amplo e não foram
@@ -93,7 +93,7 @@ necessários para a comunicação voz→modelo): snapshots de KV entre conversas
 ## Resultado do build
 
 `:app:assembleDebug :app:assembleRelease --offline` passou com R8 e assinatura local.
-APK release final (sem modelo embutido) = **7.581.986 bytes (7,2 MB)**. O modelo 4B
+APK release final (sem modelo embutido) = **7.584.259 bytes (7,23 MB)** na versão V20.4. O modelo 4B
 é instalado separadamente em `filesDir/user-model.gguf` (1.212.103.520 bytes).
 
 ## Obtenção do modelo 4B a partir do Loci (V20.3)
@@ -115,6 +115,24 @@ Instalação no Glia sem toque na UI (INJECT_EVENTS indisponível no HyperOS):
 4. APK release com a mesma assinatura substituiu o debug preservando os dados.
 
 O modelo 2B foi removido: não há asset embutido nem seletor 2B nas configurações.
+
+## Mecanismo de teto de memória (V20.4, inspiração em Loci)
+
+O Loci mostra em logs `residency preload/post-load gate: available / margin / reserve /
+budget / decision` e recusa alocações nativas quando excedem o orçamento. O Glia
+implementou mecanismo equivalente, por código próprio:
+
+- `GliaMemory.availableBytes()` lê `MemAvailable` de `/proc/meminfo` (fallback
+  `ActivityManager.availMem`).
+- `budget = MemAvailable - 1,25 GiB (sistema) - 256 MiB (runtime) - tamanho_do_modelo`.
+- O JNI usa `llama_model_n_layer`, `llama_model_n_head_kv` e `llama_model_n_embd`
+  para calcular bytes por token de KV q8_0 e reduz `n_ctx` até caber no budget
+  (intervalo 256–4096).
+- Se nem 256 tokens couberem, `nativeLoadModel` retorna `-4` com mensagem clara.
+- `nativeContextSize()` e `nativeUsesQuantizedKv()` expõem o estado real para o app.
+
+Isso garante que o Bonsai 4B rode abaixo do teto disponível em vez de depender de
+um contexto fixo que poderia estourar a memória em HyperOS.
 
 ## Limitações
 

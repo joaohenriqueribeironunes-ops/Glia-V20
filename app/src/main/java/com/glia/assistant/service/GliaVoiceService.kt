@@ -223,7 +223,6 @@ class GliaVoiceService : Service() {
             return
         }
 
-        val ctx = GliaPrefs.contextSize(this)
         val threads = GliaPrefs.threads(this)
 
         if (!file.isFile || file.length() < 1024) {
@@ -231,20 +230,30 @@ class GliaVoiceService : Service() {
             GliaState.setModelStatus("erro: $modelError")
             return
         }
-        val memCheck = GliaMemory.check(this, file.length())
-        if (!memCheck.first) {
-            modelError = memCheck.second.ifBlank { "Memoria insuficiente para o modelo" }
+        val plan = GliaMemory.plan(this, file.length(), GliaPrefs.contextSize(this))
+        if (!plan.ok) {
+            modelError = plan.message.ifBlank { "Memoria insuficiente para o modelo" }
             GliaState.setModelStatus("erro: $modelError")
             return
         }
         GliaState.setModelStatus("carregando ${file.name}...")
-        val ok = llm.loadModel(file.absolutePath, ctx, threads)
+        val ok = llm.loadModel(
+            file.absolutePath,
+            plan.contextTokens,
+            threads,
+            plan.budgetBytes
+        )
         if (ok) {
             modelReady = true
             modelError = null
             GliaPrefs.setModelPath(this, file.absolutePath)
-            GliaState.setModelStatus("pronto (${file.name}, ${file.length() / (1024 * 1024)} MB)")
-            Log.i(TAG, "Modelo carregado: ${file.absolutePath}")
+            val kv = if (llm.usesQuantizedKv()) "KV q8_0" else "KV F16"
+            val realCtx = llm.contextSize()
+            GliaState.setModelStatus(
+                "pronto (${file.name}, ${file.length() / (1024 * 1024)} MB, " +
+                    "ctx $realCtx, $kv, teto ${plan.budgetBytes / (1024 * 1024)} MB)"
+            )
+            Log.i(TAG, "Modelo carregado: ${file.absolutePath} (${plan.message})")
             return
         }
 

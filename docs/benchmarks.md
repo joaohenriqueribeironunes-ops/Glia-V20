@@ -1,46 +1,46 @@
-# Benchmarks e Metodologia — Glia V20.3
-
-> Device físico conectado: Redmi Note 11S (`2201117SI`, `miel_in`), serial `9XCAROHMCY65I7MB`.
-> Medições de build e instalação concluídas; medições de runtime (tokens/s, RAM) ainda pendentes.
+# Benchmarks e Metodologia — Glia V20.4
 
 ## Medições realizadas
 
 | Medida | Valor |
 |---|---|
-| Versão do app | 2.0.0 (versionCode 20), source V20.3 |
-| APK release (R8 + C++ release, **sem modelo embutido**) | **7.581.986 bytes (7,2 MB, medido)** |
-| Modelo instalado | `filesDir/user-model.gguf` no Glia |
-| Tamanho do modelo | **1.212.103.520 bytes (medido)** |
-| SHA-256 do modelo | `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4` |
-| Commit HF do modelo | `50ebba61be85e5be07e8083db468ace0fc1bac43` |
-| Push para `/sdcard/Download` | ~34,5 MB/s, 33,5 s |
-| Quantização | Q2_0 (upstream llama.cpp b11556+) |
-| Contexto | teto do app 4096 tokens |
-| Threads | 2–8 (default 6 no Helio G96) |
-| Headroom de memória | 1.342.177.280 bytes (~1,25 GiB) |
-| Assinatura instalada | `3750aff5` (mesma da keystore release local) |
+| Versão | 2.0.4 / versionCode 20 (tag `v20`) |
+| Device usado | Redmi Note 11S, `product:miel_in`, `model:2201117SI`, serial `9XCAROHMCY65I7MB` |
+| APK release (sem asset 2B) | **7.584.259 bytes (7,23 MB)** |
+| Build release | R8 + C++ release + assinatura local; `:app:assembleRelease --offline` OK |
+| Modelo único | `Ternary-Bonsai-2-4B-Q2_0.gguf` |
+| Tamanho do modelo | **1.212.103.520 bytes (1,13 GiB)** |
+| SHA-256 | `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4` |
+| Commit HF de origem | `50ebba61be85e5be07e8083db468ace0fc1bac43` |
+| Push ADB do 4B | ~34,5 MB/s, ~33,5 s |
+| headroom de sistema | 1.342.177.280 bytes (1,25 GiB) |
+| Reserva de runtime | 268.435.456 bytes (256 MiB) |
+| Contexto adaptativo | 256 a 4096 tokens |
+| KV | q8_0 com fallback F16 |
+| Assinatura instalada no device | `3750aff5` (mesma da keystore release local) |
 
-## Como o modelo chegou ao device
+## Teto de memória (V20.4)
 
-1. Deep link do Loci disparado por ADB: `loci://open_from_hf?model=prism-ml/Ternary-Bonsai-2-4B-gguf`.
-2. O download do Loci ficou em app-private inacessível (`allowBackup=0`, não debuggable, sem root).
-3. O mesmo artefato verificado foi obtido pela URL pública observada no Loci e enviado por
-   `adb push` para `/sdcard/Download/Ternary-Bonsai-2-4B-Q2_0.gguf`.
-4. APK debug assinado com a keystore release e `debuggable=true` foi instalado; `run-as` copiou o
-   arquivo para `files/user-model.gguf`; o APK release foi reinstalado com a mesma assinatura,
-   preservando os dados.
+1. `GliaMemory.availableBytes()` lê `MemAvailable` em `/proc/meminfo`; se indisponível, usa `ActivityManager.availMem`.
+2. `budget = MemAvailable - 1,25 GiB - 256 MiB - tamanho_do_modelo`.
+3. O JNI calcula `bytes/token = 2 * n_layer * n_head_kv * (n_embd / n_head_kv) * 1,0625 + 512` para KV q8_0.
+4. `n_ctx = clamp(requested, 256, min(4096, budget / bytes_per_token))`.
+5. Se `budget / bytes_per_token < 256`, `nativeLoadModel` retorna `-4` e o app exibe erro claro; nunca carrega um contexto que estouraria o teto.
+6. O status do app mostra contexto real, tipo de KV (`q8_0`/`F16`) e teto em MB.
 
-## Metodologia de runtime (pendente)
+## Como medir no device
 
-1. Ligar o tile "Glia" e falar uma frase de teste.
-2. `prefill_ms`, `decode_ms` e `tps` vêm de `nativeLastGenerationStats()` (JNI), exibidos na UI.
-3. `adb logcat -s GliaVoice GliaNative` registra `generate: prompt=... generated=... prefill_ms=... decode_ms=... tps=...`.
-4. Pico de RAM: `adb shell dumpsys meminfo` filtrando o PID do Glia durante a geração.
+```powershell
+adb shell cat /proc/meminfo
+adb shell dumpsys meminfo com.glia.assistant
+adb logcat -s GliaVoiceService GliaNative
+```
 
-## Limitações
+As estatísticas nativas são publicadas no estado do app:
+`prefill Xms · decode Yms · T tok/s · N tokens (prompt P, reuse R)`.
 
-- O Loci não exporta o arquivo de modelo por provider/AppFunctions; sem a etapa debug+`run-as`,
-  a importação depende de SAF (toque na UI, bloqueado aqui por `INJECT_EVENTS`).
-- `INJECT_EVENTS` indisponível: não foi possível desbloquear a tela nem tocar na UI por ADB.
-- Mali-G57: backend CPU por decisão documentada; sem benchmark GPU real.
-- Vosk STT model não embutido.
+## Metodologia pendente / limitações
+
+- Medições de abertura, pico de RAM e tokens/s dependem de abrir o app no device; o ambiente de build não consegue injetar toques por ADB (`INJECT_EVENTS` bloqueado pelo HyperOS).
+- O Loci mantém o modelo em app-private inacessível (`run-as` falha, `allowBackup=0`); o arquivo foi obtido da mesma fonte verificada e instalado no Glia via build debug com `run-as`, depois substituído pelo release com a mesma assinatura.
+- Mali-G57: backend CPU por decisão documentada; sem comparativo GPU confiável no device.
