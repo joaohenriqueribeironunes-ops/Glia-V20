@@ -89,7 +89,7 @@ fun NotesScreen(activity: NotesActivity) {
         if (notes.isEmpty()) {
             GlassCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    "Nenhum pensamento guardado ainda. Diga \"Glia, quero diminuir a carga cognitiva\" e fale o que está na sua mente.",
+                    "Nenhum pensamento guardado ainda. Diga \"quero diminuir a carga cognitiva\" e fale o que está na sua mente.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,

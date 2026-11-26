@@ -15,9 +15,9 @@ object VoicePrintLayout {
     const val PROFILE_FILE = "voiceprint.bin"
 
     val TRAINING_PHRASES = listOf(
-        "Glia, esta é a minha voz.",
-        "Glia, que horas são hoje?",
-        "Glia, abra a câmera, por favor."
+        "Esta é a minha voz.",
+        "Que horas são hoje?",
+        "Abra a câmera, por favor."
     )
 
     fun sha256(file: File): String {

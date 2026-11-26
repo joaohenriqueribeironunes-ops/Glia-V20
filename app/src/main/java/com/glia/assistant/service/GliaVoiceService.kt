@@ -7,22 +7,17 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.media.AudioManager
-import android.media.ToneGenerator
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.glia.assistant.MainActivity
 import com.glia.assistant.R
 import com.glia.assistant.commands.CognitiveNotesStore
 import com.glia.assistant.commands.CommandEngine
-import com.glia.assistant.commands.CommandParser
+import com.glia.assistant.commands.SecondaryCommand
 import com.glia.assistant.commands.VoiceCommand
 import com.glia.assistant.core.GliaPrefs
 import com.glia.assistant.stt.AmplifiedAudioSource
@@ -31,7 +26,6 @@ import com.glia.assistant.stt.CapturePlanner
 import com.glia.assistant.stt.ContinuousListenPolicy
 import com.glia.assistant.stt.SttRetryPolicy
 import com.glia.assistant.stt.SystemStt
-import com.glia.assistant.stt.WakeWord
 import com.glia.assistant.voice.VoiceCheck
 import com.glia.assistant.voice.VoiceDecision
 import com.glia.assistant.tts.GliaTts
@@ -72,7 +66,7 @@ class GliaVoiceService : Service() {
             private set
     }
 
-    private enum class ListeningPhase { IDLE, AWAITING_COMMAND, AWAITING_THOUGHT }
+    private enum class ListeningPhase { IDLE, AWAITING_THOUGHT }
 
     private val exceptionHandler = CoroutineExceptionHandler { _, error ->
         Log.e(TAG, "Erro no serviço", error)
@@ -137,10 +131,6 @@ class GliaVoiceService : Service() {
                 return START_STICKY
             }
             ACTION_START_LISTENING -> {
-                phase = ListeningPhase.AWAITING_COMMAND
-                GliaState.setMode(GliaMode.LISTENING)
-                GliaState.setAssistantStatus("ouvindo comando")
-                updateNotification("Ouvindo comando...")
                 startContinuousListening()
                 if (!GliaPrefs.isTileActive(this)) {
                     GliaState.setAssistantStatus("ative o tile Glia para usar a voz")
@@ -163,11 +153,11 @@ class GliaVoiceService : Service() {
     )
 
     /** Escuta única. O loop externa reinicia na sequência para manter o mic ligado. */
-    private suspend fun listenOnce(timeoutMs: Long, mode: GliaMode): String? {
+    private suspend fun listenOnce(timeoutMs: Long): String? {
         for (attempt in 0 until SttRetryPolicy.MAX_ATTEMPTS) {
             if (shuttingDown || !stt.isAvailable()) return null
             val plan = CapturePlanner.plan(attempt, GliaPrefs.micGain(this))
-            val outcome = listenOnceAttempt(timeoutMs, mode, plan)
+            val outcome = listenOnceAttempt(timeoutMs, plan)
             if (outcome.text != null) return outcome.text
             if (outcome.errorCode == VOICE_REJECTED_CODE) return null
             val code = outcome.errorCode ?: continue
@@ -190,7 +180,6 @@ class GliaVoiceService : Service() {
 
     private suspend fun listenOnceAttempt(
         timeoutMs: Long,
-        mode: GliaMode,
         plan: CapturePlanner.Plan
     ): ListenOutcome {
         if (shuttingDown || !stt.isAvailable()) {
@@ -240,19 +229,18 @@ class GliaVoiceService : Service() {
                     override fun onReady() {
                         if (token == listenGeneration) {
                             GliaState.setAssistantStatus(
-                                if (phase == ListeningPhase.IDLE) "microfone ligado" else "ouvindo comando"
+                                if (phase == ListeningPhase.AWAITING_THOUGHT) {
+                                    "ouvindo pensamento"
+                                } else {
+                                    "microfone ligado — diga um comando"
+                                }
                             )
                         }
                     }
 
                     override fun onPartial(text: String) {
                         if (token != listenGeneration) return
-                        if (mode == GliaMode.LISTENING) GliaState.setPartial(text)
-                        if (fromOwner && mode == GliaMode.IDLE &&
-                            !tts.isSpeaking() && WakeWord.isWakeWord(text)
-                        ) {
-                            triggerWake(text)
-                        }
+                        if (!tts.isSpeaking()) GliaState.setPartial(text)
                     }
 
                     override fun onRms(rms: Float) {
@@ -320,14 +308,14 @@ class GliaVoiceService : Service() {
     private fun startContinuousListening() {
         if (shuttingDown || !GliaPrefs.isTileActive(this) || listenJob?.isActive == true) return
         wakeLock = acquireLock(wakeLock, "glia:mic")
+        phase = ListeningPhase.IDLE
         GliaState.setMode(GliaMode.IDLE)
         GliaState.setPartial("")
         GliaState.setAssistantStatus("microfone ligado")
-        updateNotification("Microfone ligado — diga \"Glia\"")
+        updateNotification("Microfone ligado — diga um comando")
         listenJob = scope.launch {
             while (isActive && !shuttingDown && GliaPrefs.isTileActive(this@GliaVoiceService)) {
-                val mode = if (phase == ListeningPhase.IDLE) GliaMode.IDLE else GliaMode.LISTENING
-                val heard = listenOnce(ContinuousListenPolicy.LISTEN_TIMEOUT_MS, mode)
+                val heard = listenOnce(ContinuousListenPolicy.LISTEN_TIMEOUT_MS)
                 if (!isActive || shuttingDown) break
                 val delayMs = ContinuousListenPolicy.RESTART_DELAY_MS
                 if (delayMs > 0) delay(delayMs)
@@ -338,64 +326,46 @@ class GliaVoiceService : Service() {
         }
     }
 
-    /** Entrega a fala ao fluxo correto sem desligar o microfone. */
+    /** Executa somente comandos reconhecidos; fala comum é ignorada em silêncio. */
     private fun dispatch(text: String) {
         if (shuttingDown || ContinuousListenPolicy.ignoreWhileSpeaking(tts.isSpeaking())) return
 
-        // "Glia" sozinho ativa na primeira fala. Se o comando vier na mesma
-        // frase, ele é executado aqui e não exige uma segunda fala.
-        val wake = WakeWord.detect(text)
-        if (wake.activated) {
-            if (phase != ListeningPhase.AWAITING_COMMAND) triggerWake(text)
-            if (wake.hasCommand) processCommand(wake.command)
+        if (phase == ListeningPhase.AWAITING_THOUGHT) {
+            scope.launch { saveThought(text) }
             return
         }
 
-        when (phase) {
-            ListeningPhase.IDLE -> Unit
-            ListeningPhase.AWAITING_COMMAND -> processCommand(text)
-            ListeningPhase.AWAITING_THOUGHT -> scope.launch { saveThought(text) }
-        }
+        val command = SecondaryCommand.parse(text)
+        if (command is VoiceCommand.Unknown) return
+        processCommand(command)
     }
 
-    private fun triggerWake(text: String) {
-        if (shuttingDown) return
-        phase = ListeningPhase.AWAITING_COMMAND
-        vibrate()
-        beep()
-        bringToFront()
-        GliaState.setResponse(text)
-        GliaState.setMode(GliaMode.LISTENING)
-        GliaState.setAssistantStatus("ouvindo comando")
-        updateNotification("Ouvindo comando...")
-    }
-
-    private fun processCommand(text: String) {
+    private fun processCommand(command: VoiceCommand) {
         if (commandJob?.isActive == true) return
+        // Acende a tela quando o comando chega com o aparelho bloqueado.
+        bringToFront()
         commandJob = scope.launch {
             try {
-                handleText(text)
+                handleCommand(command)
             } finally {
                 commandJob = null
             }
         }
     }
 
-    private suspend fun handleText(text: String): Boolean {
-        val command = CommandParser.parse(text)
+    private suspend fun handleCommand(command: VoiceCommand) {
         GliaState.setMode(GliaMode.THINKING)
         GliaState.setResponse("")
         if (command is VoiceCommand.StartCognitiveOffload) {
             phase = ListeningPhase.AWAITING_THOUGHT
             speakAndWait("Claro. Pode falar o que está na sua mente. Estou ouvindo.", 45_000L)
-            return false
+            return
         }
         val result = commandEngine.execute(command)
         phase = ListeningPhase.IDLE
         GliaState.setResponse(result.spoken)
         if (result.openNotes) openNotes()
         speakAndWait(result.spoken, 45_000L)
-        return true
     }
 
     private suspend fun saveThought(text: String) {
@@ -475,7 +445,7 @@ class GliaVoiceService : Service() {
                             Intent.FLAG_ACTIVITY_CLEAR_TOP or
                             Intent.FLAG_ACTIVITY_SINGLE_TOP
                     )
-                    putExtra(MainActivity.EXTRA_WAKE, true)
+                    putExtra(MainActivity.EXTRA_SHOW, true)
                 }
             )
         } catch (e: Exception) {
@@ -569,33 +539,6 @@ class GliaVoiceService : Service() {
             if (lock?.isHeld == true) lock.release()
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao liberar wake lock", e)
-        }
-    }
-
-    private fun vibrate() {
-        try {
-            val effect = VibrationEffect.createOneShot(60L, VibrationEffect.DEFAULT_AMPLITUDE)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                getSystemService(VibratorManager::class.java)?.defaultVibrator?.vibrate(effect)
-            } else {
-                @Suppress("DEPRECATION")
-                getSystemService(Vibrator::class.java)?.vibrate(effect)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Falha ao vibrar", e)
-        }
-    }
-
-    private fun beep() {
-        try {
-            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 70)
-            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
-            scope.launch {
-                delay(250)
-                tone.release()
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Falha ao tocar beep", e)
         }
     }
 

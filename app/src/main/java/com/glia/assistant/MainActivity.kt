@@ -66,7 +66,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 class MainActivity : ComponentActivity() {
     companion object {
         private const val EXTRA_ACTION = "glia_action"
-        const val EXTRA_WAKE = "glia_wake"
+        const val EXTRA_SHOW = "glia_show"
     }
 
     private val tileActive = MutableStateFlow(false)
@@ -81,7 +81,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         showOnLockScreen()
         setContent { GliaTheme { MainScreen(this, tileActive.collectAsState().value) } }
-        if (intent?.getBooleanExtra(EXTRA_WAKE, false) == true) dismissKeyguard()
+        if (intent?.getBooleanExtra(EXTRA_SHOW, false) == true) dismissKeyguard()
         val action = intent?.getStringExtra(EXTRA_ACTION)
         if (action != null) {
             startGlia(normalizeAction(action))
@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra(EXTRA_WAKE, false)) dismissKeyguard()
+        if (intent.getBooleanExtra(EXTRA_SHOW, false)) dismissKeyguard()
         val action = intent.getStringExtra(EXTRA_ACTION)
         if (action != null) startGlia(normalizeAction(action))
     }
@@ -249,7 +249,7 @@ fun MainScreen(activity: MainActivity, tileActive: Boolean) {
 
         Text(
             text = when (mode) {
-                GliaMode.IDLE -> if (tileActive) "Diga \"Glia\"" else "Ative o tile para ouvir"
+                GliaMode.IDLE -> if (tileActive) "Diga um comando" else "Ative o tile para ouvir"
                 GliaMode.LISTENING -> "Ouvindo..."
                 GliaMode.THINKING -> "Preparando..."
                 GliaMode.SPEAKING -> "Falando..."
@@ -309,7 +309,7 @@ private fun ControlGrid(activity: MainActivity, tileActive: Boolean, noteCount: 
         ControlEntry("mic", "Escuta", if (tileActive) "ligada" else "desligada", tileActive, GliaAccent.Purple) {
             activity.toggleTile()
         },
-        ControlEntry("chat", "Falar agora", "sem palavra-chave", false, GliaAccent.Teal) {
+        ControlEntry("chat", "Falar agora", "comando direto", false, GliaAccent.Teal) {
             activity.startGlia(GliaVoiceService.ACTION_START_LISTENING)
         },
         ControlEntry("spark", "Testar voz", "Neural Dii pt-BR", false, GliaAccent.Coral) {

@@ -135,7 +135,7 @@ fun VoiceTrainingScreen(activity: VoiceTrainingActivity) {
         )
         Text(status, style = MaterialTheme.typography.bodyMedium)
 
-        SettingsCard("Amostras", "Diga cada frase como se estivesse chamando a Glia.") {
+        SettingsCard("Amostras", "Diga cada frase em voz alta, sem precisar chamar a Glia.") {
             VoicePrintLayout.TRAINING_PHRASES.forEachIndexed { index, phrase ->
                 Text(
                     "${index + 1}. $phrase",

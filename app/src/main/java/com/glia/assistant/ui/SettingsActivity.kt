@@ -108,11 +108,11 @@ fun SettingsScreen(activity: SettingsActivity) {
             )
         }
 
-        SettingsCard("Ativação", "Tile na central de controle e palavra-chave \"Glia\".") {
+        SettingsCard("Ativação", "Tile na central de controle; comandos diretos, sem palavra-chave.") {
             Text(
                 "1. Abra a central de controle e adicione o tile Glia.\n" +
                     "2. Toque no tile para ligar a escuta.\n" +
-                    "3. Diga apenas \"Glia\" mesmo com a tela bloqueada.\n" +
+                    "3. Diga um comando, como \"que horas são?\", mesmo com a tela bloqueada.\n" +
                     "4. Permita sobreposição e ignore a otimização de bateria para o HyperOS não encerrar a escuta.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -136,7 +136,7 @@ fun SettingsScreen(activity: SettingsActivity) {
             HyperTile(
                 icon = { GliaGlyph("reload", MaterialTheme.colorScheme.primary, Modifier.size(18.dp)) },
                 label = "Ignorar otimização de bateria",
-                caption = "mantém a palavra-chave ativa",
+                caption = "mantém a escuta de comandos ativa",
                 active = false,
                 accent = GliaAccent.Lavender,
                 onClick = {
@@ -170,7 +170,7 @@ fun SettingsScreen(activity: SettingsActivity) {
             HyperTile(
                 icon = { GliaGlyph("mic", MaterialTheme.colorScheme.primary, Modifier.size(18.dp)) },
                 label = "Permitir microfone",
-                caption = "escuta da palavra-chave e comandos",
+                caption = "escuta direta dos comandos",
                 active = micGranted,
                 accent = GliaAccent.Purple,
                 onClick = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) },
@@ -249,7 +249,7 @@ fun SettingsScreen(activity: SettingsActivity) {
             )
         }
 
-        SettingsCard("Comandos de voz", "Diga \"Glia\" e fale o comando — ou fale tudo na mesma frase.") {
+        SettingsCard("Comandos de voz", "Com o tile ligado, fale o comando direto — sem dizer \"Glia\".") {
             Text(
                 "• Que horas são?\n" +
                     "• Que dia é hoje?\n" +

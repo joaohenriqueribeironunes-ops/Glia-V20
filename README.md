@@ -1,10 +1,11 @@
 # Glia — Assistente de voz determinística (Android)
 
-Glia V29 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
+Glia V30 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
 Os comandos e a síntese de voz rodam no aparelho; o reconhecimento de fala usa o motor
 do sistema Android, alimentado por PCM condicionado e amplificado quando o fabricante
 aceita essa entrada, com preferência por processamento offline quando disponível.
 Opcionalmente, um modelo local de impressão de voz limita as respostas somente à voz treinada.
+Não há palavra de ativação: com o tile ligado, a Glia responde diretamente aos comandos.
 
 ## Stack
 
@@ -21,20 +22,20 @@ Opcionalmente, um modelo local de impressão de voz limita as respostas somente 
 - Condicionamento de PCM: filtro passa-alta (~77 Hz), ganho linear até 0,85 e
   limiter suave apenas nos picos; sem dupla compressão com o AGC nativo.
 
-## Funcionalidades (V29)
+## Funcionalidades (V30)
 
 1. **Microfone contínuo**: o tile na central de controle liga/desliga o assistente.
    Enquanto estiver ligado, o microfone fica ativo e o reconhecimento reinicia
    imediatamente após cada fala ou silêncio; o mic só é liberado quando você desliga
-   o tile. Dizer apenas **“Glia”** aciona os comandos na primeira fala, mesmo com a tela
-   bloqueada; “Glia, que horas são?” executa na hora, sem exigir uma segunda fala. O app
-   usa `setShowWhenLocked`/`setTurnScreenOn` e wake lock parcial.
+   o tile. Não é preciso dizer “Glia”: **“Que horas são?”** é entendido de primeira,
+   mesmo com a tela bloqueada. Fala comum é ignorada em silêncio. O app usa
+   `setShowWhenLocked`/`setTurnScreenOn` e wake lock parcial.
 2. **Hora e data**: “Que horas são?”, “Que dia é hoje?”.
 3. **Calendário**: “Tenho compromissos hoje/amanhã/esta semana?” usa `READ_CALENDAR`
    e responde com até três eventos próximos.
 4. **Lanterna**: “Ligar a lanterna”, “Desligar a lanterna” ou apenas alternar.
 5. **Abrir aplicativos**: “Abra o WhatsApp”, “Abra a câmera”, “Abra o ...”.
-6. **Descarregamento cognitivo**: dizer **“Glia, quero diminuir a carga cognitiva”**,
+6. **Descarregamento cognitivo**: dizer **“Quero diminuir a carga cognitiva”**,
    falar o pensamento e ouvir: **“Certo, armazenei seus pensamentos. Foi bom pensar com você.”**
    O pensamento aparece em um bloco de notas estilizado dentro do app.
 7. **Notas estilizadas**: tela “Pensamentos” com data/hora, exclusão individual e limpeza total.
@@ -54,10 +55,10 @@ Opcionalmente, um modelo local de impressão de voz limita as respostas somente 
     nos códigos 5/6), sessão do reconhecedor reiniciada sem callbacks atrasados,
     100 ms de silêncio no fim da fala e verificação de voz desativada apenas no fallback
     com microfone ao vivo.
-12. **Ativação em uma fala**: o detector usa o token exato “Glia” (normaliza acentos,
-    caixa e pontuação), mantém “Olá Glia” apenas por compatibilidade e não dispara em
-    palavras como “glioblastoma”. O comando que vem depois de “Glia” é aproveitado na
-    mesma transcrição, sem cair em “Não entendi”.
+12. **Comandos secundários diretos**: o detector `SecondaryCommand` normaliza a fala,
+    remove saudações/cortesias e o prefixo opcional “Glia” e entrega o resultado ao
+    parser determinístico. Apenas comandos reconhecidos geram resposta; “Glia” sozinha,
+    “olá” e conversas comuns não acionam a assistente.
 
 ## Compilar e testar
 
@@ -69,7 +70,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_all_tests.ps1
 ```
 
 APK release: `app/build/outputs/apk/release/app-release.apk`
-(**94.074.272 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
+(**94.072.248 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
 
 Suíte oficial: **84 testes JVM**, `OK (84 tests)` + `ALL_TESTS_OK`.
 O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por isso
@@ -102,11 +103,12 @@ O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por is
   `filesDir/glia-voiceprint`; `VoicePrintStore` guarda até 8 embeddings no
   armazenamento privado e usa `SpeakerEmbeddingExtractor` do AAR já embarcado.
 - Cada escuta gera um embedding do PCM capturado. Se o filtro estiver ativo, apenas
-  similaridade ≥ rigor autoriza wake word e comandos; falha de extração nega o comando.
+  similaridade ≥ rigor autoriza os comandos; falha técnica do filtro é avisada uma vez
+  e não silencia a assistente.
 
 ## Permissões MIUI / HyperOS
 
-Microfone, calendário, notificações, `WAKE_LOCK`, `VIBRATE`, overlay e tile. Para o
+Microfone, calendário, notificações, `WAKE_LOCK`, overlay e tile. Para o
 HyperOS não encerrar a escuta, permita sobreposição e ignore a otimização de bateria
 em Configurações. O app não inicia sozinho após boot: a escuta começa quando o tile é
 ativado.
@@ -125,7 +127,7 @@ ativado.
   prova de identidade e pode ser burlado por gravações.
 - O APK cresceu para ~89,7 MB por causa do modelo de voz (~25,8 MB comprimido).
 - Device de desenvolvimento desconectado na validação final: falta confirmar em runtime
-  wake word com tela bloqueada, lanterna, abertura de apps, calendário real e a taxa
+  comandos diretos com tela bloqueada, lanterna, abertura de apps, calendário real e a taxa
   de aceitação/rejeição da impressão de voz.
 - HyperOS bloqueia injeção de input por ADB (`INJECT_EVENTS`); a validação de toque é manual.
 
@@ -135,4 +137,4 @@ ativado.
 - `docs/benchmarks.md` — versão, tamanho do APK e estado da medição.
 - `docs/loci-analise.md` — registro histórico da análise que motivou a V20; a V21
   removeu completamente o LLM/Ternary e não copiou código ou assets do Loci.
-- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V29.
+- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V30.
