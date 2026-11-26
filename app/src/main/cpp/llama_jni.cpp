@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdint>
 #include <algorithm>
+#include <chrono>
 
 #include "llama.h"
 
@@ -27,6 +28,14 @@ static std::string g_last_error;
 static llama_model* g_model = nullptr;
 static llama_context* g_ctx = nullptr;
 static const llama_vocab* g_vocab = nullptr;
+
+// Estatisticas da ultima geracao (observadas pelo app via nativeLastGenerationStats).
+static int64_t g_prompt_tokens = 0;
+static int64_t g_generated_tokens = 0;
+static int64_t g_prefill_ms = 0;
+static int64_t g_decode_ms = 0;
+static int64_t g_tps_x100 = 0;
+static int64_t g_reused_prefix_tokens = 0;
 
 static void set_error(const char* msg) {
     {
@@ -207,24 +216,36 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeLoadModel(JNIEnv* env, jobject thi
     }
 
     const int ctxSize = nCtx > 0 ? nCtx : 2048;
-    llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx = (uint32_t) ctxSize;
-    cparams.n_batch = (uint32_t) std::max(512, ctxSize);
-    cparams.n_ubatch = 512;
-    cparams.n_threads = nThreads > 0 ? nThreads : 4;
-    cparams.n_threads_batch = cparams.n_threads;
-    cparams.offload_kqv = false;
+    const int threads = nThreads > 0 ? nThreads : 4;
+    auto make_context = [&](bool quantized_kv) -> llama_context* {
+        llama_context_params cparams = llama_context_default_params();
+        cparams.n_ctx = (uint32_t) ctxSize;
+        cparams.n_batch = (uint32_t) std::max(512, ctxSize);
+        cparams.n_ubatch = 512;
+        cparams.n_threads = threads;
+        cparams.n_threads_batch = threads;
+        cparams.offload_kqv = false;
+        cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        // KV quantizada reduz RAM; se o backend/arquitetura recusar, cai para F16.
+        cparams.type_k = quantized_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
+        cparams.type_v = quantized_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
+        return llama_init_from_model(g_model, cparams);
+    };
 
-    g_ctx = llama_init_from_model(g_model, cparams);
+    g_ctx = make_context(true);
     if (!g_ctx) {
-        set_error("llama_init_from_model falhou");
+        LOGI("KV q8_0 recusada; tentando F16");
+        g_ctx = make_context(false);
+    }
+    if (!g_ctx) {
+        set_error("llama_init_from_model falhou (q8_0 e F16)");
         unload_locked();
         return -2;
     }
 
     g_loaded.store(true);
     clear_error();
-    LOGI("Modelo carregado: ctx=%d threads=%d vocab=%d", ctxSize, cparams.n_threads,
+    LOGI("Modelo carregado: ctx=%d threads=%d vocab=%d", ctxSize, threads,
          llama_vocab_n_tokens(g_vocab));
     return 0;
 }
@@ -270,6 +291,12 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz
 
     g_stop.store(false);
     g_generating.store(true);
+    g_prompt_tokens = 0;
+    g_generated_tokens = 0;
+    g_prefill_ms = 0;
+    g_decode_ms = 0;
+    g_tps_x100 = 0;
+    g_reused_prefix_tokens = 0;
     struct GeneratingGuard {
         ~GeneratingGuard() { g_generating.store(false); }
     } guard;
@@ -305,12 +332,16 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz
     }
 
     llama_memory_clear(llama_get_memory(g_ctx), true);
+    const auto prefill_start = std::chrono::steady_clock::now();
     llama_batch batch = llama_batch_get_one(tokens.data(), (int) tokens.size());
     if (llama_decode(g_ctx, batch) != 0) {
         env->DeleteGlobalRef(cbGlobal);
         set_error("Falha no decode do prompt");
         return JNI_FALSE;
     }
+    g_prompt_tokens = (int64_t) tokens.size();
+    g_prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - prefill_start).count();
 
     llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
     llama_sampler* sampler = llama_sampler_chain_init(sparams);
@@ -327,6 +358,7 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz
     int tokenCount = 0;
     const int max_new = maxTokens > 0 ? maxTokens : 256;
     LOGI("generate: start prompt_len=%zu max_new=%d", promptStr.size(), max_new);
+    const auto decode_start = std::chrono::steady_clock::now();
     for (int i = 0; i < max_new; i++) {
         if (g_stop.load()) break;
 
@@ -376,6 +408,16 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz
     }
 
     llama_sampler_free(sampler);
+    g_generated_tokens = tokenCount;
+    g_decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - decode_start).count();
+    g_tps_x100 = g_decode_ms > 0
+        ? (int64_t) (tokenCount * 100000.0 / (double) g_decode_ms)
+        : 0;
+    LOGI("generate: prompt=%lld generated=%d prefill_ms=%lld decode_ms=%lld tps=%lld.%02lld",
+         (long long) g_prompt_tokens, tokenCount, (long long) g_prefill_ms,
+         (long long) g_decode_ms, (long long) (g_tps_x100 / 100),
+         (long long) (g_tps_x100 % 100));
     LOGI("generate: loop ended tokens=%d error=%s", tokenCount, error.c_str());
 
     JNIEnv* e = nullptr;
@@ -395,6 +437,29 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz
     LOGI("generate done, tokens=%d", tokenCount);
 
     return JNI_TRUE;
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_glia_assistant_llm_LlamaBridge_nativeLastGenerationStats(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const jlong stats[6] = {
+        (jlong) g_prompt_tokens, (jlong) g_generated_tokens, (jlong) g_prefill_ms,
+        (jlong) g_decode_ms, (jlong) g_tps_x100, (jlong) g_reused_prefix_tokens
+    };
+    jlongArray out = env->NewLongArray(6);
+    if (out) env->SetLongArrayRegion(out, 0, 6, stats);
+    return out;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_glia_assistant_llm_LlamaBridge_nativeCountTokens(JNIEnv* env, jobject thiz, jstring text) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_loaded.load() || !g_vocab || !text) return -1;
+    const char* p = env->GetStringUTFChars(text, nullptr);
+    if (!p) return -1;
+    std::vector<llama_token> tokens = tokenize(std::string(p));
+    env->ReleaseStringUTFChars(text, p);
+    return (jint) tokens.size();
 }
 
 JNIEXPORT void JNICALL

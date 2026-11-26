@@ -54,6 +54,14 @@ mas é incluído no APK de release.
   `filesDir/user-model.gguf`. Se o 4B estiver ausente, o app avisa e usa o 2B embutido.
 - Q2_0 roda no upstream llama.cpp b11556+; sem links de download versionados.
 
+## Otimizações de inferência (V20.2)
+
+O motor nativo usa KV cache `q8_0` com fallback automático para F16, flash attention,
+`n_threads`/`n_threads_batch`, mmap e medição de prefill/decode/TPS dentro do JNI.
+O limite de admissão de memória reserva ~1,25 GiB de headroom de sistema. As
+estatísticas reais aparecem na tela principal (`prefill ... · decode ... · tok/s`).
+O mapeamento com a análise estática do Loci está em `docs/loci-analise.md`.
+
 ## Benchmarks / limitações
 
 - Ver `docs/benchmarks.md` e `docs/loci-analise.md`.

@@ -4,15 +4,17 @@ import android.app.ActivityManager
 import android.content.Context
 
 object GliaMemory {
-    const val MIN_AVAILABLE_FOR_MODEL: Long = 1_800_000_000L
+    /** Headroom de sistema observado em mecanismos de admissao de modelos mobile (~1,25 GiB). */
+    const val SYSTEM_HEADROOM_BYTES: Long = 1_342_177_280L
+    const val MIN_AVAILABLE_FOR_MODEL: Long = SYSTEM_HEADROOM_BYTES
 
     fun check(context: Context, modelSizeBytes: Long): Pair<Boolean, String> {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
         val mi = ActivityManager.MemoryInfo()
         val hasInfo = am?.getMemoryInfo(mi) ?: false
         if (hasInfo == false) return true to ""
-        val needed = modelSizeBytes + 512_000_000L + 256_000_000L
+        val needed = modelSizeBytes + SYSTEM_HEADROOM_BYTES
         val okFree = mi.availMem >= needed
-        return okFree to if (okFree) "" else "Memoria livre (${mi.availMem / 1024 / 1024} MB) abaixo do teto recomendado para este modelo."
+        return okFree to if (okFree) "" else "Memoria livre (${mi.availMem / 1024 / 1024} MB) abaixo do teto de ${needed / 1024 / 1024} MB para este modelo."
     }
 }

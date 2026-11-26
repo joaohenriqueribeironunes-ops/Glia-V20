@@ -110,7 +110,7 @@ class GliaVoiceService : Service() {
         recorder = AudioRecorder()
         stt = VoskStt(this)
         tts = GliaTts(this)
-        llm = LlamaBridge()
+        llm = LlamaBridge
         toolBus = ToolBus(ContextDeviceController(this))
 
         GliaState.setTtsStatus(tts.status())
@@ -250,7 +250,7 @@ class GliaVoiceService : Service() {
 
         modelReady = false
         val err = llm.lastError()
-        modelError = err.ifBlank { "falha ao carregar ${file.name}" }
+        modelError = err?.ifBlank { "falha ao carregar ${file.name}" } ?: "falha ao carregar ${file.name}"
         Log.e(TAG, "Falha ao carregar ${file.absolutePath}: $err")
         GliaState.setModelStatus("erro: $modelError")
     }
@@ -474,7 +474,7 @@ class GliaVoiceService : Service() {
         }
         if (!llm.isLoaded()) {
             val detail = modelError ?: llm.lastError()
-            val msg = if (detail.isBlank()) {
+            val msg = if (detail.isNullOrBlank()) {
                 "Modelo de IA nao carregado."
             } else {
                 "Modelo de IA nao carregado: $detail"
@@ -534,14 +534,24 @@ class GliaVoiceService : Service() {
             }
 
             val elapsed = SystemClock.elapsedRealtime() - started
-            GliaState.setGenerationStats(elapsed, tokens)
+            val stats = llm.lastGenerationStats()
+            if (stats.size >= 6) {
+                val tps = stats[4] / 100.0
+                GliaState.setDetailedGenerationStats(
+                    "prefill ${stats[2]}ms · decode ${stats[3]}ms · " +
+                        String.format(java.util.Locale.getDefault(), "%.1f", tps) +
+                        " tok/s · ${stats[1]} tokens (prompt ${stats[0]}, reuse ${stats[5]})"
+                )
+            } else {
+                GliaState.setGenerationStats(elapsed, tokens)
+            }
             updateNotification("Respondendo...")
 
             val response = GliaState.responseText.value
             if (response.isBlank()) {
                 val fallback = "Nao consegui gerar uma resposta."
                 GliaState.setResponse(fallback)
-                GliaState.setLastError(llm.lastError().ifBlank { "Resposta vazia do modelo" })
+                GliaState.setLastError(llm.lastError()?.ifBlank { "Resposta vazia do modelo" } ?: "Resposta vazia do modelo")
                 speakAndWait(fallback, 20000)
             } else {
                 val toolCall = ToolCallParser.parse(response) ?: BuiltInRouter.route(userText)

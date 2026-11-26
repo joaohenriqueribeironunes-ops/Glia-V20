@@ -37,6 +37,8 @@ object GliaState {
     fun setLastError(s: String) { _lastError.value = s }
     fun setGenerationStats(ms: Long, tokens: Int) { _generationStats.value = "${ms}ms, $tokens tokens" }
 
+    fun setDetailedGenerationStats(text: String) { _generationStats.value = text }
+
     fun resetForCommand() {
         _responseText.value = ""
         _partialText.value = ""

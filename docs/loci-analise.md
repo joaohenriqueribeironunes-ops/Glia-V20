@@ -1,39 +1,104 @@
-# Analise do Loci — Técnicas Aplicadas ao Glia V20
+# Análise do Loci — REA, achados e mapeamento no Glia V20.2
 
-> **Nota honesta:** o APK do Loci **não foi localizado** no ambiente (buscas em
-> Downloads/Desktop/OneDrive/C:\ durante o desenvolvimento; nenhum APK correspondente
-> encontrado). A engenharia reversa não pôde ser executada. As técnicas abaixo foram
-> aplicadas com base em documentação técnica pública do llama.cpp/GGUF, sem cópia de
-> código ou assets do Loci.
+> Objetivo do usuário: "destrinche o 'Loci' com o REA e use toda a lógica de comunicação
+> entre a base do app e o Ternary Bonsai 2 4B já instalado ... da maneira mais rápida e
+> principalmente 'Otimizada possível'."
 
-## Técnicas do Loci estudadas/aplicadas (via documentação e código próprio)
+## Alvo e evidência
 
-1. **mmap do GGUF**: `llama_model_load_from_file` com `LLAMA_LOAD_MODE_MMAP`
-   (arquivo sob /data/data, sem cópia para RAM).
-2. **KV-cache enxugado**: limpar KV (`llama_memory_clear`) a cada geração; contexto
-   limitado ao configurado (teto 4096 tokens).
-3. **Sampler customizado**: penalidades (repetition/presence), top_k, top_p, min_p, temp.
-4. **Contexto curto**: prompt de sistema enxuto + instrução de ferramenta.
+O dispositivo Redmi Note 11S (`9XCAROHMCY65I7MB`, `model:2201117SI`) foi conectado
+via ADB e autorizado. O app Loci está instalado como `app.lociai.loci`. O REA
+`pull_adb_package` extraiu o pacote com cobertura completa
+(`ev_0889750928dee842e65014a5c942e55f27ed13f2c66e71cdcc8693e614129b43`) para
+`%TEMP%\opencode\loci-apk-pull\app.lociai.loci\`:
 
-## Onde o Loci poderia ter contribuído
+| Arquivo | Tamanho | SHA-256 |
+|---|---:|---|
+| base.apk | 33.956.351 | 42835456a63289bd8da556a44fc96baab7974c59ca89571f797b40095c28ffc1 |
+| split_config.arm64_v8a.apk | 36.927.823 | 1acb3b491c76f4190651f796c231363d1e84dfc2b28dc0dd3c7a3937059c6901 |
+| split_config.pt.apk | 237.977 | — |
+| split_config.xxhdpi.apk | 70.845 | — |
 
-- Ciclo de vida do modelo (warm start, swap), pré-carregamento.
+`inspect_android_package` não pôde ser executado: `REA_JADX_MCP_JAR` não configurado
+e nenhum `jadx*.jar` foi encontrado. `decode_android_resources` também ficou
+indisponível (apktool fora do PATH). Ghidra não está configurado e, neste Windows,
+não aceita ELF arm64; IDA/Kuna/Hopper também indisponíveis. Por isso a leitura de
+código Java/Kotlin foi feita com `dexdump -l plain` sobre os DEX extraídos do APK,
+complementada por strings ASCII do `libloci_llama_jni.so`.
 
-## Tentativa de leitura via ADB (device do usuário)
+**Limitação importante:** trata-se de evidência estática. Nenhuma execução do Loci
+foi instrumentada com Frida; nenhum código ou asset do Loci foi copiado para o Glia.
 
-O usuário escolheu conectar o Redmi Note 11S **via USB**. Até o momento:
-- `adb devices -l` retorna apenas `List of devices attached` (vazio), mesmo após
-  `adb kill-server` / `adb start-server`.
-- Nenhum dispositivo Android aparece em `Get-PnpDevice -PresentOnly` no Windows,
-  portanto a porta USB/atuação de depuração ainda não foi detectada.
-- `scripts/scan_loci_adb.ps1` foi adicionado: quando o device estiver autorizado,
-  ele localiza pacotes com `loci`, faz `pm path`, `adb pull` dos APKs/splits e salva
-  `dumpsys package` em `%TEMP%\opencode\loci-scan`.
+## Observações (DEX + biblioteca nativa)
 
-A análise real (REA sobre o APK extraído) fica bloqueada até a autorização ADB.
+Classes Loci relevantes:
+- `com.mwaldman.loci.domain.inference.NativeLlamaBridge`
+- `com.mwaldman.loci.domain.inference.LlamaInferenceService`
+- `com.mwaldman.loci.domain.inference.NativeAllocationCallback`
+- `com.mwaldman.loci.domain.inference.NativeLlamaTokenCallback`
+
+API nativa observada no DEX inclui: `nativeCreateWithMemoryBudget`, `nativePrefill`,
+`nativePromotePrefill`, `nativeCanResume`, `nativeCanRewindPrefix`,
+`nativePushKvSnapshot`/`nativePopKvSnapshot`, `nativeSaveConversationKvState`,
+`nativeShedContext`, `nativeGenerate`, `nativeResumeGeneration`, `nativeStop`,
+`nativeCountTokens`, `nativeLastGenerationStats`, `nativePrefillProgress`,
+`nativeCurrentCoreResidency`, `nativeResidencyStats`, `nativeSystemInfo`,
+`nativeCpuFeatures`, `nativeLoadMultimodalProjector`.
+
+Strings/configuração observadas:
+- `gpuLayers=99, preferGpu=false, residencySystemHeadroomBytes=1342177280`
+- `decodeThreads`, `prefillThreads`, `numOfThreads`
+- `kvCacheBytes`, `kvTypeK/V`, `headCountKv`, `flashAttentionType`
+- `retainedBytes`, `reusedPrefixTokens`, `admittedContextTokens`, `safePromptLimitTokens`
+- `Bonsai 2 4B` e a descrição "Best-in-class quality under 1 GB..." (texto do modelo no app)
+
+Símbolos reais confirmados em `libloci_llama_jni.so`: `llama_model_load_from_file`,
+`llama_init_from_model`, `llama_attach_threadpool`, `ggml_threadpool_new`,
+`ggml_threadpool_params_default`, `llama_memory_clear`, `llama_state_seq_get_data/set_data`,
+`llama_sampler_init_penalties/top_k/top_p/min_p/temp/dist/greedy`, `llama_n_threads`,
+`llama_n_threads_batch`, `llama_tokenize`, `llama_batch_get_one`, `llama_decode`,
+`llama_get_logits_ith`, `llama_model_chat_template`, `ggml_backend_load_all_from_path`,
+`ggml_backend_dev_by_type`, `llama_flash_attn_type_name`.
+
+Logs nativos observados:
+- `prefill done: tokens=%zu reused=%zu`
+- `generate done: ... prefill_ms=%lld decode_ms=%lld pacing_ms=%lld tps=%.2f`
+- `residency preload/post-load gate: ... available=... margin=... reserve=... budget=... decision=...`
+- `Context creation failed with q8_0 KV; retrying with F16 defaults`
+- `Native model allocations exceed available memory. (native_memory_budget_exceeded)`
+
+## Interpretação (inferência, não observação de execução)
+
+O Loci separa prefill e decode em fases com estatísticas próprias, usa CPU com
+threadpool (`preferGpu=false`), KV cache `q8_0` com fallback para F16, admite ou
+recusa a carga conforme memória disponível com headroom de ~1,25 GiB, mantém
+snapshots de KV/conversação e mede TPS/latência dentro do motor nativo.
+
+## Mapeamento para o Glia V20.2 (implementado, sem copiar código)
+
+| Padrão observado no Loci | Implementação própria no Glia | Arquivo |
+|---|---|---|
+| CPU com `n_threads` / `n_threads_batch` | já existia; mantido | `llama_jni.cpp` |
+| KV `q8_0` com fallback F16 + flash attention | `make_context(quantized_kv)` usa `GGML_TYPE_Q8_0`, `LLAMA_FLASH_ATTN_TYPE_ENABLED` e recai para F16 se `llama_init_from_model` falhar | `llama_jni.cpp` |
+| Stats `prefill_ms` / `decode_ms` / `tps` | `nativeLastGenerationStats()` publica `[promptTokens, generatedTokens, prefillMs, decodeMs, tpsX100, reusedPrefixTokens]`; UI mostra `prefill ... decode ... tok/s` | `llama_jni.cpp`, `LlamaBridge.kt`, `GliaState.kt`, `GliaVoiceService.kt` |
+| `nativeCountTokens` | exposto para diagnóstico de limite de contexto | `LlamaBridge.kt` |
+| Headroom de memória ~1,25 GiB | `GliaMemory.SYSTEM_HEADROOM_BYTES = 1_342_177_280`, `needed = modelSize + headroom` | `GliaMemory.kt` |
+| mmap + KV limpo por geração | já existia; mantido | `llama_jni.cpp` |
+
+Não replicados nesta rodada (dependem de protocolo de estado mais amplo e não foram
+necessários para a comunicação voz→modelo): snapshots de KV entre conversas,
+`nativeResumeGeneration` e hotset de núcleos. `reusedPrefixTokens` é reportado como
+0 no Glia porque o prompt é reconstruído por turno.
+
+## Resultado do build
+
+`:app:assembleRelease --offline` passou com R8 e assinatura local; APK = 554.274.427
+bytes (528,6 MB). A otimização não aumentou perceptivelmente o APK.
 
 ## Limitações
 
-- REA/UREA indisponíveis no ambiente; substituições usadas: inspeção estática via
-  ferramentas de linha de comando equivalentes.
-- GPU Mali-G57: sem benchmark real disponível; decisão documentada de usar CPU backend.
+- JADX/REA Android e descompiladores nativos indisponíveis: análise de DEX por
+  `dexdump` e strings, sem pseudocódigo Java ou C++.
+- Nenhum benchmark de runtime foi executado; números de TPS/latência são coletados
+  pelo próprio app em device, não estimados neste documento.
+- Mali-G57 segue em backend CPU (decisão documentada).
