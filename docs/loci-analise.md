@@ -53,7 +53,7 @@ mesma fonte verificada (`prism-ml/Ternary-Bonsai-2-4B-gguf`, commit
 `50ebba61be85e5be07e8083db468ace0fc1bac43`) e instalado por ADB/debug `run-as` porque
 o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
 
-## Situação na V21/V22/V23/V24/V25/V26
+## Situação na V21/V22/V23/V24/V25/V26/V27
 
 - Pacote `llm/`, `GliaMemory`, `MemoryBudget`, `llama.cpp`, `CMakeLists.txt`, testes de
   GGUF/budget e configurações de inferência foram removidos.
@@ -75,5 +75,10 @@ o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
 - A V26 adicionou treino opcional de impressão de voz: três frases geram embeddings
   CAM++ locais e o áudio de cada escuta é verificado antes de autorizar wake word e
   comandos. O modelo 3D-Speaker (Apache 2.0) foi adquirido separadamente, sem copiar
-  nada do Loci. APK de 94.068.464 bytes. Nenhum código ou asset do Loci foi copiado em
-  nenhuma versão.
+  nada do Loci. APK de 94.068.464 bytes.
+- A V27 corrigiu o reconhecimento de som: `SpeechGate` com limiar adaptativo ao ruído,
+  retry em `NO_MATCH`/timeout quando o fabricante ignora o PCM amplificado, sessão do
+  reconhecedor reiniciada sem callbacks atrasados, verificação de voz desativada no
+  fallback com microfone ao vivo e falha técnica do filtro avisada sem silenciar a
+  assistente. A suíte passou a 72 testes puros. APK de 94.071.844 bytes. Nenhum código
+  ou asset do Loci foi copiado em nenhuma versão.

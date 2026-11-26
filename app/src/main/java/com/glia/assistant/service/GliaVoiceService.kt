@@ -27,9 +27,12 @@ import com.glia.assistant.commands.VoiceCommand
 import com.glia.assistant.core.GliaPrefs
 import com.glia.assistant.stt.AmplifiedAudioSource
 import com.glia.assistant.stt.AmplifiedMic
+import com.glia.assistant.stt.CapturePlanner
 import com.glia.assistant.stt.ContinuousListenPolicy
 import com.glia.assistant.stt.SttRetryPolicy
 import com.glia.assistant.stt.SystemStt
+import com.glia.assistant.voice.VoiceCheck
+import com.glia.assistant.voice.VoiceDecision
 import com.glia.assistant.tts.GliaTts
 import com.glia.assistant.ui.GliaMode
 import com.glia.assistant.ui.GliaState
@@ -91,6 +94,7 @@ class GliaVoiceService : Service() {
     @Volatile private var shuttingDown = false
     @Volatile private var listenGeneration = 0
     @Volatile private var phase = ListeningPhase.IDLE
+    private var voiceUnavailableNotified = false
 
     override fun onCreate() {
         super.onCreate()
@@ -161,16 +165,17 @@ class GliaVoiceService : Service() {
     private suspend fun listenOnce(timeoutMs: Long, mode: GliaMode): String? {
         for (attempt in 0 until SttRetryPolicy.MAX_ATTEMPTS) {
             if (shuttingDown || !stt.isAvailable()) return null
-            val outcome = listenOnceAttempt(
-                timeoutMs = timeoutMs,
-                mode = mode,
-                preferOffline = SttRetryPolicy.preferOffline(attempt),
-                useAmplifiedSource = SttRetryPolicy.useAmplifiedSource(attempt)
-            )
+            val plan = CapturePlanner.plan(attempt, GliaPrefs.micGain(this))
+            val outcome = listenOnceAttempt(timeoutMs, mode, plan)
             if (outcome.text != null) return outcome.text
             if (outcome.errorCode == VOICE_REJECTED_CODE) return null
             val code = outcome.errorCode ?: continue
-            if (SttRetryPolicy.shouldRetry(code) && attempt < SttRetryPolicy.MAX_ATTEMPTS - 1) {
+            val retryable = if (plan.amplifiedSource) {
+                SttRetryPolicy.shouldRetryAfterAmplified(code)
+            } else {
+                SttRetryPolicy.shouldRetry(code)
+            }
+            if (retryable && attempt < SttRetryPolicy.MAX_ATTEMPTS - 1) {
                 withContext(Dispatchers.Main) { stt.reset() }
                 continue
             }
@@ -185,8 +190,7 @@ class GliaVoiceService : Service() {
     private suspend fun listenOnceAttempt(
         timeoutMs: Long,
         mode: GliaMode,
-        preferOffline: Boolean,
-        useAmplifiedSource: Boolean
+        plan: CapturePlanner.Plan
     ): ListenOutcome {
         if (shuttingDown || !stt.isAvailable()) {
             return ListenOutcome(
@@ -196,32 +200,36 @@ class GliaVoiceService : Service() {
             )
         }
 
-        // Sempre capturamos PCM: ele alimenta o reconhecedor (quando aceito) e
-        // também a verificação da voz treinada, inclusive no fallback.
+        // Nas tentativas amplificadas o PCM é capturado antes do STT e também
+        // serve para verificar a voz. Na última tentativa o reconhecedor escuta
+        // o microfone ao vivo; não há PCM para verificar, então o filtro é
+        // desativado para não descartar a fala do próprio usuário.
         var source: AmplifiedAudioSource? = null
-        var fromOwner = true
-        val gain = if (useAmplifiedSource) {
-            GliaPrefs.micGain(this@GliaVoiceService)
-        } else {
-            com.glia.assistant.stt.MicGain.DEFAULT
+        var voiceCheck = VoiceCheck.SKIPPED
+        if (plan.amplifiedSource) {
+            val captured = withContext(Dispatchers.IO) {
+                runCatching { amplifiedMic.capture(timeoutMs, plan.gain) }
+            }
+            val audio = captured.getOrNull()
+            if (captured.isFailure) {
+                Log.w(
+                    TAG,
+                    "Captura amplificada falhou; usando microfone do sistema",
+                    captured.exceptionOrNull()
+                )
+            } else if (audio == null) {
+                return ListenOutcome(
+                    null,
+                    SttRetryPolicy.SPEECH_TIMEOUT_CODE,
+                    "nenhuma fala detectada"
+                )
+            } else {
+                voiceCheck = withContext(Dispatchers.IO) { voicePrint.verify(audio.file) }
+                source = audio
+            }
         }
-        val captured = withContext(Dispatchers.IO) {
-            runCatching { amplifiedMic.capture(timeoutMs, gain) }
-        }
-        val audio = captured.getOrNull()
-        if (captured.isFailure) {
-            // Fabricante sem suporte a EXTRA_AUDIO_SOURCE: usa o microfone padrão.
-            Log.w(TAG, "Captura amplificada falhou; usando microfone do sistema", captured.exceptionOrNull())
-        } else if (audio == null) {
-            return ListenOutcome(
-                null,
-                SttRetryPolicy.SPEECH_TIMEOUT_CODE,
-                "nenhuma fala detectada"
-            )
-        } else {
-            fromOwner = withContext(Dispatchers.IO) { voicePrint.verify(audio.file) }
-            if (useAmplifiedSource) source = audio else audio.close()
-        }
+        notifyVoiceUnavailable(voiceCheck)
+        val fromOwner = VoiceDecision.allow(voiceCheck, allowOnUnavailable = true)
 
         return withContext(Dispatchers.Main) {
             try {
@@ -267,7 +275,7 @@ class GliaVoiceService : Service() {
                         listenGeneration++
                         result.complete(ListenOutcome(null, code, message))
                     }
-                }, preferOffline, source)
+                }, plan.preferOffline, source)
                 if (!started) {
                     listenGeneration++
                     ListenOutcome(
@@ -287,6 +295,18 @@ class GliaVoiceService : Service() {
             } finally {
                 source?.close()
             }
+        }
+    }
+
+    /** Avisa uma única vez quando o filtro de voz falha por motivo técnico. */
+    private fun notifyVoiceUnavailable(check: VoiceCheck) {
+        if (check == VoiceCheck.UNAVAILABLE) {
+            if (!voiceUnavailableNotified) {
+                voiceUnavailableNotified = true
+                GliaState.setLastError("Filtro de voz indisponível; ouvindo sem filtro")
+            }
+        } else {
+            voiceUnavailableNotified = false
         }
     }
 

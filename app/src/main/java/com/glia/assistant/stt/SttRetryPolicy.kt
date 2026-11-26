@@ -16,10 +16,19 @@ package com.glia.assistant.stt
 object SttRetryPolicy {
     const val ERROR_CLIENT_CODE = 2
     const val ERROR_AUDIO_CODE = 3
+    const val NO_MATCH_CODE = 5
     const val SPEECH_TIMEOUT_CODE = 6
 
     fun shouldRetry(errorCode: Int): Boolean =
         errorCode == ERROR_CLIENT_CODE || errorCode == ERROR_AUDIO_CODE
+
+    /**
+     * Quando o PCM amplificado é ignorado pelo fabricante, a fala termina antes
+     * do startListening e o sistema responde 5/6. Nesses casos a próxima
+     * tentativa usa o microfone do sistema, que capta a fala em tempo real.
+     */
+    fun shouldRetryAfterAmplified(errorCode: Int): Boolean =
+        shouldRetry(errorCode) || errorCode == NO_MATCH_CODE || errorCode == SPEECH_TIMEOUT_CODE
 
     /** Mantido para compatibilidade com a correção da V23. */
     fun shouldRetryWithoutOffline(errorCode: Int): Boolean = shouldRetry(errorCode)

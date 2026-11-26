@@ -39,10 +39,6 @@ class AmplifiedMic(private val context: Context) {
         private const val SAMPLE_RATE = 16_000
         private const val FRAME_BYTES = 640 // 20 ms em PCM16 mono
         private const val PRE_ROLL_FRAMES = 10
-        private const val START_THRESHOLD = 0.015f
-        private const val END_THRESHOLD = 0.006f
-        private const val END_FRAMES = 25 // 500 ms de silêncio
-        private const val MAX_FRAMES = 500 // 10 s por fala
     }
 
     /**
@@ -101,37 +97,46 @@ class AmplifiedMic(private val context: Context) {
             if (file.exists()) file.delete()
             val frame = ByteArray(FRAME_BYTES)
             val preRoll = ArrayDeque<ByteArray>()
-            var speaking = false
-            var silenceFrames = 0
-            var speechFrames = 0
+            val gate = SpeechGate()
+            var state = SpeechGate.initial()
+            var speechDetected = false
             val deadline = SystemClock.elapsedRealtime() + timeoutMs
 
             FileOutputStream(file, false).use { out ->
                 while (SystemClock.elapsedRealtime() < deadline) {
                     val read = recorder.read(frame, 0, frame.size)
-                    if (read <= 0) continue
-                    val amplified = amplifyChunk(frame, read, gain)
+                    if (read == 0) continue
+                    if (read < 0) {
+                        throw IllegalStateException("falha ao ler o microfone ($read)")
+                    }
+                    val amplified = amplifyChunk(frame, read, MicGain.clamp(gain))
                     val rms = MicGain.rms(amplified, 0, amplified.size)
+                    val (next, decision) = gate.feed(state, rms)
+                    state = next
 
-                    if (!speaking) {
-                        preRoll.addLast(amplified)
-                        if (preRoll.size > PRE_ROLL_FRAMES) preRoll.removeFirst()
-                        if (rms >= START_THRESHOLD) {
-                            speaking = true
+                    when (decision) {
+                        SpeechGate.Decision.WAIT -> {
+                            if (!state.speaking) {
+                                preRoll.addLast(amplified)
+                                if (preRoll.size > PRE_ROLL_FRAMES) preRoll.removeFirst()
+                            }
+                        }
+                        SpeechGate.Decision.START -> {
+                            speechDetected = true
                             for (pending in preRoll) out.write(pending)
                             preRoll.clear()
+                            out.write(amplified)
                         }
-                        continue
+                        SpeechGate.Decision.KEEP -> out.write(amplified)
+                        SpeechGate.Decision.END, SpeechGate.Decision.MAX -> {
+                            out.write(amplified)
+                            break
+                        }
                     }
-
-                    out.write(amplified)
-                    speechFrames++
-                    if (rms < END_THRESHOLD) silenceFrames++ else silenceFrames = 0
-                    if (silenceFrames >= END_FRAMES || speechFrames >= MAX_FRAMES) break
                 }
             }
 
-            if (!speaking) {
+            if (!speechDetected) {
                 runCatching { if (file.exists()) file.delete() }
                 return null
             }

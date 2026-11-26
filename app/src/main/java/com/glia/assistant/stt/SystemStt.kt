@@ -32,6 +32,7 @@ class SystemStt(private val context: Context) {
         val listener: Listener,
         val source: AmplifiedAudioSource? = null
     ) {
+        var ready = false
         fun closeSource() = source?.close()
     }
 
@@ -70,13 +71,15 @@ class SystemStt(private val context: Context) {
 
     private val bridge = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
-            current()?.listener?.onReady()
+            val session = current() ?: return
+            session.ready = true
+            session.listener.onReady()
         }
 
         override fun onBeginningOfSpeech() = Unit
 
         override fun onRmsChanged(rmsdb: Float) {
-            current()?.listener?.onRms(rmsdb)
+            current()?.takeIf { it.ready }?.listener?.onRms(rmsdb)
         }
 
         override fun onBufferReceived(buffer: ByteArray?) = Unit
@@ -102,7 +105,7 @@ class SystemStt(private val context: Context) {
         override fun onPartialResults(partialResults: Bundle?) {
             val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull().orEmpty()
-            current()?.listener?.onPartial(text.trim())
+            current()?.takeIf { it.ready }?.listener?.onPartial(text.trim())
         }
 
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
@@ -119,6 +122,12 @@ class SystemStt(private val context: Context) {
         val engine = recognizer ?: run {
             source?.close()
             return false
+        }
+        // Reconhecedor ainda ocupado: descarta callbacks da sessão anterior
+        // antes de iniciar outra, evitando ERROR_RECOGNIZER_BUSY (8).
+        runCatching {
+            engine.setRecognitionListener(null)
+            engine.cancel()
         }
         active?.closeSource()
         active = null
@@ -144,7 +153,10 @@ class SystemStt(private val context: Context) {
         val session = active ?: return
         active = null
         session.closeSource()
-        runCatching { recognizer?.cancel() }
+        runCatching {
+            recognizer?.setRecognitionListener(null)
+            recognizer?.cancel()
+        }
     }
 
     /** Recria o reconhecedor após ERROR_CLIENT, que o deixa em estado inválido. */

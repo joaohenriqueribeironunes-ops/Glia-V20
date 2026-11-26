@@ -88,7 +88,9 @@ fun VoiceTrainingScreen(activity: VoiceTrainingActivity) {
         status = "Ouvindo... diga a frase em voz alta."
         scope.launch {
             val stored = withContext(Dispatchers.IO) {
-                var source = runCatching { AmplifiedMic(ctx).capture(8_000L, 1f) }.getOrNull()
+                var source = runCatching {
+                    AmplifiedMic(ctx).capture(8_000L, GliaPrefs.micGain(ctx))
+                }.getOrNull()
                 try {
                     val audio = source ?: return@withContext false
                     val embedding = store.embeddingFromPcm(audio.file) ?: return@withContext false

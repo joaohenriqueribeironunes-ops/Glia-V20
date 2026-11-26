@@ -1,6 +1,6 @@
-# Diagnóstico — Glia V26
+# Diagnóstico — Glia V27
 
-A V26 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
+A V27 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
 O fluxo é: `AudioRecord` com ganho → PCM amplificado via `EXTRA_AUDIO_SOURCE` →
 verificação opcional da voz com 3D-Speaker CAM++ → `SpeechRecognizer` do sistema →
 `CommandParser`/`CommandEngine` → voz neural VITS/Piper pt-BR feminina embarcada →
@@ -10,7 +10,10 @@ A instalação da voz é validada por SHA-256 e estrutura antes de ser publicada
 `filesDir/glia-neural-voice`. O modelo de impressão de voz segue o mesmo critério em
 `filesDir/glia-voiceprint`; os embeddings ficam em `filesDir/voiceprint.bin`.
 Se algum asset estiver ausente ou corrompido, a Glia avisa no status em vez de
-falhar silenciosamente.
+falhar silenciosamente. A captura usa `SpeechGate` com ruído de fundo adaptativo e
+não bloqueia o reconhecimento quando o VAD não encontra fala: os códigos 5/6 acionam
+retry, e a última tentativa usa o microfone do sistema ao vivo. Falha interna na
+verificação de voz é avisada uma vez e não silencia a assistente.
 
 ## Verificação rápida no aparelho
 

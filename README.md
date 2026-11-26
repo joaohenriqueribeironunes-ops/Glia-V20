@@ -1,6 +1,6 @@
 # Glia — Assistente de voz determinística (Android)
 
-Glia V26 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
+Glia V27 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
 Os comandos e a síntese de voz rodam no aparelho; o reconhecimento de fala usa o motor
 do sistema Android, alimentado por PCM amplificado quando o fabricante aceita essa
 entrada, com preferência por processamento offline quando disponível. Opcionalmente,
@@ -19,7 +19,7 @@ um modelo local de impressão de voz limita as respostas somente à voz treinada
 - Impressão de voz: 3D-Speaker CAM++ (`sherpa-onnx` 1.12.40), treino com 3 amostras
   e verificação por similaridade de cosseno — tudo no aparelho.
 
-## Funcionalidades (V26)
+## Funcionalidades (V27)
 
 1. **Microfone contínuo**: o tile na central de controle liga/desliga o assistente.
    Enquanto estiver ligado, o microfone fica ativo e o reconhecimento reinicia
@@ -45,6 +45,10 @@ um modelo local de impressão de voz limita as respostas somente à voz treinada
 10. **Somente minha voz**: Configurações → Somente minha voz grava três frases suas,
     extrai embeddings com CAM++ e passa a ignorar fala de outras pessoas. O rigor é
     ajustável (0,35–0,75; padrão 0,55) e o treino pode ser apagado ou desativado.
+11. **Captura corrigida**: detector de fala com limiar adaptativo ao ruído, retry
+    quando o fabricante ignora o PCM amplificado (inclusive nos códigos 5/6),
+    sessão do reconhecedor reiniciada sem callbacks atrasados e verificação de voz
+    desativada apenas no fallback com microfone ao vivo.
 
 ## Compilar e testar
 
@@ -56,9 +60,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_all_tests.ps1
 ```
 
 APK release: `app/build/outputs/apk/release/app-release.apk`
-(**94.068.464 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
+(**94.071.844 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
 
-Suíte oficial: **58 testes JVM**, `OK (58 tests)` + `ALL_TESTS_OK`.
+Suíte oficial: **72 testes JVM**, `OK (72 tests)` + `ALL_TESTS_OK`.
 O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por isso
 `scripts/run_all_tests.ps1` roda JUnitCore com classpath explícito. Detalhes em
 `docs/testes.md`.
@@ -122,4 +126,4 @@ ativado.
 - `docs/benchmarks.md` — versão, tamanho do APK e estado da medição.
 - `docs/loci-analise.md` — registro histórico da análise que motivou a V20; a V21
   removeu completamente o LLM/Ternary e não copiou código ou assets do Loci.
-- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V26.
+- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V27.

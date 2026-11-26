@@ -16,6 +16,15 @@ class SttRetryPolicyTest {
     }
 
     @Test
+    fun `no match e timeout disparam retry somente apos fonte amplificada`() {
+        assertFalse(SttRetryPolicy.shouldRetry(5))
+        assertFalse(SttRetryPolicy.shouldRetry(6))
+        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(5))
+        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(6))
+        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(2))
+    }
+
+    @Test
     fun `compatibilidade com a politica sem offline`() {
         assertTrue(SttRetryPolicy.shouldRetryWithoutOffline(2))
         assertTrue(SttRetryPolicy.shouldRetryWithoutOffline(3))

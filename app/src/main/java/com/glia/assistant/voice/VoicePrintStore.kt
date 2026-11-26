@@ -84,12 +84,20 @@ class VoicePrintStore(context: Context) {
         }
     }
 
-    /** Verificação usada pelo serviço: sem treino ativo, tudo é aceito. */
-    fun verify(pcm: File): Boolean {
-        if (!GliaPrefs.voiceLockEnabled(app) || !isEnrolled()) return true
-        val sample = embeddingFromPcm(pcm) ?: return false
-        val reference = VoicePrintMath.average(samples()) ?: return false
-        return VoicePrintMath.isOwner(reference, sample, GliaPrefs.voiceThreshold(app))
+    /**
+     * Verificação usada pelo serviço. Falha interna do modelo não é tratada
+     * como "voz estranha": o serviço recebe UNAVAILABLE e decide se continua
+     * sem filtro, para não deixar a assistente muda por um erro técnico.
+     */
+    fun verify(pcm: File): VoiceCheck {
+        if (!GliaPrefs.voiceLockEnabled(app) || !isEnrolled()) return VoiceCheck.SKIPPED
+        val sample = embeddingFromPcm(pcm) ?: return VoiceCheck.UNAVAILABLE
+        val reference = VoicePrintMath.average(samples()) ?: return VoiceCheck.UNAVAILABLE
+        return if (VoicePrintMath.isOwner(reference, sample, GliaPrefs.voiceThreshold(app))) {
+            VoiceCheck.ALLOW
+        } else {
+            VoiceCheck.DENY
+        }
     }
 
     @Synchronized
