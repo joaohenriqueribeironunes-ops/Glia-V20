@@ -192,11 +192,7 @@ fun HyperIsland(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            val dot = when {
-                active && amplitude > 0.45f -> GliaAccent.Teal
-                active -> GliaAccent.Purple
-                else -> Color(0xFF6E6A80)
-            }
+            val dot = if (active) GliaAccent.Purple else Color(0xFF6E6A80)
             Canvas(modifier = Modifier.size(9.dp)) {
                 drawCircle(color = dot.copy(alpha = if (active) glow else 0.7f))
             }
@@ -224,7 +220,7 @@ private fun MiniWave(amplitude: Float) {
                 Modifier
                     .size(width = 2.dp, height = h)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(GliaAccent.Teal.copy(alpha = 0.9f))
+                    .background(GliaAccent.Purple.copy(alpha = 0.9f))
             )
         }
     }

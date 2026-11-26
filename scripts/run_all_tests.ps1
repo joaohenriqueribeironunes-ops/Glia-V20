@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-# Full offline test suite for Glia V30 (deterministic commands, no LLM, neural voice).
+# Full offline test suite for Glia V31 (deterministic commands, no LLM, neural voice).
 # JVM tests are launched directly via JUnitCore with an explicit classpath:
 # the Gradle Test Executor in this environment cannot see compiled test classes.
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -45,7 +45,9 @@ $classes = @(
     'com.glia.assistant.stt.ContinuousListenPolicyTest',
     'com.glia.assistant.stt.MicGainTest',
     'com.glia.assistant.stt.PcmConditionerTest',
-    'com.glia.assistant.stt.SpeechGateTest',
+    'com.glia.assistant.stt.CaptureWindowTest',
+    'com.glia.assistant.stt.TranscriptDeduperTest',
+    'com.glia.assistant.stt.RollingTailTest',
     'com.glia.assistant.stt.CapturePlannerTest',
     'com.glia.assistant.commands.SecondaryCommandTest',
     'com.glia.assistant.voice.VoicePrintMathTest',

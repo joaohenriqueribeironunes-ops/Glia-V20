@@ -1,21 +1,21 @@
-# Benchmarks e metodologia — Glia V30
+# Benchmarks e metodologia — Glia V31
 
 ## Estado da versão
 
 | Medida | Valor |
 |---|---|
-| Versão | V30 (versionCode 30, versionName 2.9.0) |
+| Versão | V31 (versionCode 31, versionName 2.10.0) |
 | Device usado no desenvolvimento | Redmi Note 11S, `product:miel_in`, `model:2201117SI`, serial `9XCAROHMCY65I7MB` |
-| APK release | **94.072.248 bytes (~89,7 MB)** — ARM64, R8, assinatura local |
+| APK release | **94.071.620 bytes (~89,7 MB)** — ARM64, R8, assinatura local |
 | Build release | `:app:assembleRelease --offline` OK |
 | Runtime | Comandos determinísticos em Kotlin; sem LLM, sem GGUF e sem JNI próprio |
-| STT | `SpeechRecognizer` do sistema, pt-BR, alimentado por PCM amplificado via `EXTRA_AUDIO_SOURCE`; comando direto sem palavra de ativação, com remoção de saudações/cortesias e prefixo opcional “Glia”; retry em `ERROR_CLIENT`/`ERROR_AUDIO`/`NO_MATCH`/timeout e fallback para microfone ao vivo; sem Vosk embutido |
+| STT | `SpeechRecognizer` do sistema, pt-BR, alimentado por janelas contínuas de PCM amplificado via `EXTRA_AUDIO_SOURCE` (3 s, 500 ms de sobreposição, sem VAD); comando direto sem ativação, retry em `ERROR_CLIENT`/`ERROR_AUDIO`/`NO_MATCH`/timeout e fallback para microfone ao vivo; sem Vosk embutido |
 | Impressão de voz | 3D-Speaker CAM++ (`3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx`, 28.281.165 bytes, 16 kHz), opcional, verificação local pela maior similaridade de cosseno entre amostras |
 | Asset da impressão | `glia-voiceprint.zip`, 25.801.265 bytes, 1 entrada ONNX |
 | Voz neural | VITS/Piper `pt_BR-dii-high.onnx` (63.511.201 bytes), feminina, 22.050 Hz |
 | Runtime da voz | sherpa-onnx 1.12.40 AAR estático; `libsherpa-onnx-jni.so` ARM64 de 22.249.744 bytes |
 | Asset da voz | `glia-neural-voice.zip`, 58.800.891 bytes, 64.254.245 descomprimidos, 11 entradas |
-| Testes JVM | 84 testes, 0 falhas (JUnitCore) |
+| Testes JVM | 88 testes, 0 falhas (JUnitCore) |
 | Testes nativos | removidos junto com llama.cpp/GliaMemory |
 
 ## Comparação com V21
@@ -30,26 +30,28 @@ própria. A V26 sobe para **94.068.464 bytes** por incluir o modelo CAM++ de imp
 de voz (25.801.265 bytes no zip). A V27 ficou em **94.071.844 bytes** após as correções
 de captura e retry. A V28 ficou em **94.073.432 bytes** com condicionamento de PCM e
 testes adicionais. A V29 ficou em **94.074.272 bytes** com o detector de wake word exato
-“Glia”. A V30 fica em **94.072.248 bytes** com o comando direto sem ativação, mantendo a
-suíte em 84 testes (o detector de wake word foi substituído por 6 testes do comando
-secundário), ainda somente `arm64-v8a`. É o custo aceito para ter voz neural
+“Glia”. A V30 ficou em **94.072.248 bytes** com o comando direto sem ativação, mantendo a
+suíte em 84 testes. A V31 fica em **94.071.620 bytes** com captura contínua em janelas
+sobrepostas, modo único roxo e mais 4 testes puros (Janela, dedupe, buffer circular e
+casos de calibração removidos), ainda somente `arm64-v8a`. É o custo aceito para ter voz neural
 feminina dedicada e filtro de falante, ambos offline.
 
 ## Custo de processamento
 
-- O microfone fica contínuo enquanto o tile estiver ligado: cada escuta tem timeout de
-  30 s e reinicia imediatamente, sem esperar nova palavra-chave, com wake lock parcial.
-  O áudio é capturado em `AudioRecord` VOICE_RECOGNITION com NoiseSuppressor e ganho
-  configurável (1x–4x, padrão 2x). O AGC nativo só é ligado em 1x; acima disso o sinal
-  passa por filtro passa-alta (~77 Hz), ganho linear até 0,85 e limiter suave nos picos,
-  seguido de `SpeechGate` com 100 ms de calibração e limiar adaptativo. Quando o
-  fabricante devolve `ERROR_CLIENT` (2) ou `ERROR_AUDIO` (3), o app recria o reconhecedor; `NO_MATCH` (5)
-  e timeout (6) também acionam retry quando a origem é amplificada, porque o fabricante
-  pode ter ignorado o PCM. A segunda tentativa mantém o áudio amplificado sem exigir
-  modo offline e a terceira usa o microfone ao vivo. A captura termina com 100 ms de
-  silêncio para o reconhecedor fechar a hipótese. A sessão anterior é cancelada antes
-  de cada escuta para não misturar callbacks atrasados. Erros 5/6/8 são normais e não
-  poluem o último erro.
+- O microfone fica contínuo enquanto o tile estiver ligado: um único `AudioRecord`
+  VOICE_RECOGNITION é aberto na ativação e só é liberado no desligamento, com wake lock
+  parcial. O áudio passa por NoiseSuppressor e ganho configurável (1x–4x, padrão 2x).
+  O AGC nativo só é ligado em 1x; acima disso o sinal passa por filtro passa-alta
+  (~77 Hz), ganho linear até 0,85 e limiter suave nos picos. Não há VAD: a captura
+  gera janelas de 3 s com 500 ms de sobreposição e 100 ms de silêncio final; a
+  deduplicação descarta transcrições repetidas pela sobreposição. Quando o fabricante
+  devolve `ERROR_CLIENT` (2) ou `ERROR_AUDIO` (3), o app recria o reconhecedor;
+  `NO_MATCH` (5) e timeout (6) também acionam retry quando a origem é amplificada,
+  porque o fabricante pode ter ignorado o PCM. A segunda tentativa mantém o áudio
+  amplificado sem exigir modo offline e a terceira usa o microfone ao vivo. A sessão
+  anterior é cancelada antes de cada escuta para não misturar callbacks atrasados.
+  A UI tem apenas um modo ativo (roxo); estados de pensamento/fala aparecem só no
+  texto de status. Erros 5/6/8 são normais e não poluem o último erro.
 - Comandos não carregam modelo de linguagem: hora/data usam `java.time`, calendário
   faz uma consulta pontual, lanterna usa `CameraManager`, apps usam o launcher do sistema.
 - A síntese usa o modelo VITS com `numThreads = 1`, taxa 1,03 e reprodução em PCM float;
@@ -73,12 +75,12 @@ Não há estatísticas de prefill/decode/tokens por segundo.
 
 ## Metodologia pendente / limitações
 
-- Device desconectado na verificação final: latência de wake word, STT, TTS, o efeito
-  real do ganho e do filtro passa-alta e a taxa de aceitação/rejeição da impressão de
-  voz não foram medidos.
+- Device desconectado na verificação final: latência de STT em janela contínua, TTS,
+  o efeito real do ganho e do filtro passa-alta e a taxa de aceitação/rejeição da
+  impressão de voz não foram medidos.
 - HyperOS bloqueia injeção de input por ADB (`INJECT_EVENTS`); toques e tela bloqueada
   precisam de validação manual.
 - `testDebugUnitTest` do Gradle falha com `ClassNotFoundException` no Test Executor;
-  a suíte oficial roda via `scripts/run_all_tests.ps1` (84/84 OK).
+  a suíte oficial roda via `scripts/run_all_tests.ps1` (88/88 OK).
 - O reconhecimento depende do motor de fala do sistema; o app solicita modo offline,
   mas o fabricante pode decidir usar rede.

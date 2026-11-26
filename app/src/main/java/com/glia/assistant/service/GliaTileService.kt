@@ -30,14 +30,14 @@ class GliaTileService : TileService() {
 
     private fun setActive(value: Boolean) {
         GliaPrefs.setTileActive(this, value)
-        GliaPrefs.setTileSubtitle(this, if (value) "Ouvindo comandos" else "Desligada")
+        GliaPrefs.setTileSubtitle(this, if (value) "Ouvindo tudo" else "Desligada")
     }
 
     private fun updateTileState(active: Boolean) {
         qsTile?.apply {
             state = if (active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
             label = "Glia"
-            subtitle = if (active) "Ouvindo comandos" else "Desligada"
+            subtitle = if (active) "Ouvindo tudo" else "Desligada"
             updateTile()
         }
     }

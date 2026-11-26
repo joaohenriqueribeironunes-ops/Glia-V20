@@ -1,11 +1,12 @@
 # Glia — Assistente de voz determinística (Android)
 
-Glia V30 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
+Glia V31 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
 Os comandos e a síntese de voz rodam no aparelho; o reconhecimento de fala usa o motor
-do sistema Android, alimentado por PCM condicionado e amplificado quando o fabricante
-aceita essa entrada, com preferência por processamento offline quando disponível.
-Opcionalmente, um modelo local de impressão de voz limita as respostas somente à voz treinada.
-Não há palavra de ativação: com o tile ligado, a Glia responde diretamente aos comandos.
+do sistema Android, alimentado por janelas contínuas de PCM condicionado e amplificado
+quando o fabricante aceita essa entrada, com preferência por processamento offline
+quando disponível. Opcionalmente, um modelo local de impressão de voz limita as
+respostas somente à voz treinada. Não há palavra de ativação nem segundo modo: com o
+tile ligado, a Glia fica em um único modo roxo ouvindo tudo.
 
 ## Stack
 
@@ -22,14 +23,16 @@ Não há palavra de ativação: com o tile ligado, a Glia responde diretamente a
 - Condicionamento de PCM: filtro passa-alta (~77 Hz), ganho linear até 0,85 e
   limiter suave apenas nos picos; sem dupla compressão com o AGC nativo.
 
-## Funcionalidades (V30)
+## Funcionalidades (V31)
 
-1. **Microfone contínuo**: o tile na central de controle liga/desliga o assistente.
-   Enquanto estiver ligado, o microfone fica ativo e o reconhecimento reinicia
-   imediatamente após cada fala ou silêncio; o mic só é liberado quando você desliga
-   o tile. Não é preciso dizer “Glia”: **“Que horas são?”** é entendido de primeira,
-   mesmo com a tela bloqueada. Fala comum é ignorada em silêncio. O app usa
-   `setShowWhenLocked`/`setTurnScreenOn` e wake lock parcial.
+1. **Microfone contínuo, um único modo**: o tile na central de controle liga/desliga
+   a assistente. Ao ligar, o `AudioRecord` é aberto uma única vez e permanece ativo
+   até você desligar o tile — não há detector de fala, janela de silêncio nem modo
+   azul separado. O áudio é entregue em janelas de 3 s com 500 ms de sobreposição,
+   e transcrições repetidas são descartadas. Não é preciso dizer “Glia”:
+   **“Que horas são?”** é entendido de primeira, mesmo com a tela bloqueada.
+   Fala comum é ignorada em silêncio. O app usa `setShowWhenLocked`/
+   `setTurnScreenOn` e wake lock parcial. O orbe e a ilha ficam sempre roxos.
 2. **Hora e data**: “Que horas são?”, “Que dia é hoje?”.
 3. **Calendário**: “Tenho compromissos hoje/amanhã/esta semana?” usa `READ_CALENDAR`
    e responde com até três eventos próximos.
@@ -50,15 +53,18 @@ Não há palavra de ativação: com o tile ligado, a Glia responde diretamente a
     extrai embeddings com CAM++ e passa a ignorar fala de outras pessoas. A decisão usa
     a maior similaridade entre as amostras, então uma gravação ruim não invalida o dono.
     O rigor é ajustável (0,35–0,75; padrão 0,55) e o treino pode ser apagado ou desativado.
-11. **Captura corrigida**: detector de fala com 100 ms de calibração e limiar
-    adaptativo ao ruído, retry quando o fabricante ignora o PCM amplificado (inclusive
-    nos códigos 5/6), sessão do reconhecedor reiniciada sem callbacks atrasados,
-    100 ms de silêncio no fim da fala e verificação de voz desativada apenas no fallback
-    com microfone ao vivo.
+11. **Captura corrigida**: janelas contínuas com sobreposição e 100 ms de silêncio
+    no fim, sem VAD que impeça o reconhecimento; retry quando o fabricante ignora o
+    PCM amplificado (inclusive nos códigos 5/6), sessão do reconhecedor reiniciada
+    sem callbacks atrasados e verificação de voz desativada apenas no fallback com
+    microfone ao vivo.
 12. **Comandos secundários diretos**: o detector `SecondaryCommand` normaliza a fala,
     remove saudações/cortesias e o prefixo opcional “Glia” e entrega o resultado ao
     parser determinístico. Apenas comandos reconhecidos geram resposta; “Glia” sozinha,
     “olá” e conversas comuns não acionam a assistente.
+13. **Modo único roxo**: os estados azul/teal e os modos “pensando”/“falando” foram
+    removidos da interface. Pensar e falar continuam visíveis apenas no texto de
+    status; o microfone permanece ouvindo inclusive durante a resposta.
 
 ## Compilar e testar
 
@@ -70,9 +76,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_all_tests.ps1
 ```
 
 APK release: `app/build/outputs/apk/release/app-release.apk`
-(**94.072.248 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
+(**94.071.620 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
 
-Suíte oficial: **84 testes JVM**, `OK (84 tests)` + `ALL_TESTS_OK`.
+Suíte oficial: **88 testes JVM**, `OK (88 tests)` + `ALL_TESTS_OK`.
 O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por isso
 `scripts/run_all_tests.ps1` roda JUnitCore com classpath explícito. Detalhes em
 `docs/testes.md`.
@@ -137,4 +143,4 @@ ativado.
 - `docs/benchmarks.md` — versão, tamanho do APK e estado da medição.
 - `docs/loci-analise.md` — registro histórico da análise que motivou a V20; a V21
   removeu completamente o LLM/Ternary e não copiou código ou assets do Loci.
-- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V30.
+- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V31.

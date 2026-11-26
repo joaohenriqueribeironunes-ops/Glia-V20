@@ -26,6 +26,7 @@ import com.glia.assistant.stt.CapturePlanner
 import com.glia.assistant.stt.ContinuousListenPolicy
 import com.glia.assistant.stt.SttRetryPolicy
 import com.glia.assistant.stt.SystemStt
+import com.glia.assistant.stt.TranscriptDeduper
 import com.glia.assistant.voice.VoiceCheck
 import com.glia.assistant.voice.VoiceDecision
 import com.glia.assistant.tts.GliaTts
@@ -85,6 +86,7 @@ class GliaVoiceService : Service() {
     private var listenJob: Job? = null
     private var commandJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private val transcriptDeduper = TranscriptDeduper()
 
     @Volatile private var shuttingDown = false
     @Volatile private var listenGeneration = 0
@@ -152,12 +154,21 @@ class GliaVoiceService : Service() {
         val errorMessage: String? = null
     )
 
-    /** Escuta única. O loop externa reinicia na sequência para manter o mic ligado. */
-    private suspend fun listenOnce(timeoutMs: Long): String? {
+    /**
+     * Reconhece uma janela já capturada. O PCM é copiado para cada tentativa,
+     * porque o SystemStt fecha (e apaga) a fonte ao terminar a sessão.
+     */
+    private suspend fun recognizeWindow(window: AmplifiedAudioSource): String? {
+        val pcm = withContext(Dispatchers.IO) {
+            runCatching { window.file.readBytes() }.getOrNull()
+        }
+        window.close()
+        if (pcm == null) return null
+
         for (attempt in 0 until SttRetryPolicy.MAX_ATTEMPTS) {
             if (shuttingDown || !stt.isAvailable()) return null
             val plan = CapturePlanner.plan(attempt, GliaPrefs.micGain(this))
-            val outcome = listenOnceAttempt(timeoutMs, plan)
+            val outcome = recognizeAttempt(pcm, plan)
             if (outcome.text != null) return outcome.text
             if (outcome.errorCode == VOICE_REJECTED_CODE) return null
             val code = outcome.errorCode ?: continue
@@ -178,8 +189,8 @@ class GliaVoiceService : Service() {
         return null
     }
 
-    private suspend fun listenOnceAttempt(
-        timeoutMs: Long,
+    private suspend fun recognizeAttempt(
+        pcm: ByteArray,
         plan: CapturePlanner.Plan
     ): ListenOutcome {
         if (shuttingDown || !stt.isAvailable()) {
@@ -190,32 +201,23 @@ class GliaVoiceService : Service() {
             )
         }
 
-        // Nas tentativas amplificadas o PCM é capturado antes do STT e também
-        // serve para verificar a voz. Na última tentativa o reconhecedor escuta
-        // o microfone ao vivo; não há PCM para verificar, então o filtro é
-        // desativado para não descartar a fala do próprio usuário.
+        // Nas tentativas amplificadas o PCM da janela também serve para
+        // verificar a voz. Na última tentativa o reconhecedor escuta o
+        // microfone ao vivo; sem PCM confiável, o filtro fica desativado.
         var source: AmplifiedAudioSource? = null
         var voiceCheck = VoiceCheck.SKIPPED
         if (plan.amplifiedSource) {
-            val captured = withContext(Dispatchers.IO) {
-                runCatching { amplifiedMic.capture(timeoutMs, plan.gain) }
+            source = withContext(Dispatchers.IO) {
+                runCatching {
+                    AmplifiedAudioSource.fromPcm(
+                        context = this@GliaVoiceService,
+                        pcm = pcm,
+                        prefix = "attempt"
+                    )
+                }.getOrNull()
             }
-            val audio = captured.getOrNull()
-            if (captured.isFailure) {
-                Log.w(
-                    TAG,
-                    "Captura amplificada falhou; usando microfone do sistema",
-                    captured.exceptionOrNull()
-                )
-            } else if (audio == null) {
-                return ListenOutcome(
-                    null,
-                    SttRetryPolicy.SPEECH_TIMEOUT_CODE,
-                    "nenhuma fala detectada"
-                )
-            } else {
-                voiceCheck = withContext(Dispatchers.IO) { voicePrint.verify(audio.file) }
-                source = audio
+            if (source != null) {
+                voiceCheck = withContext(Dispatchers.IO) { voicePrint.verify(source!!.file) }
             }
         }
         notifyVoiceUnavailable(voiceCheck)
@@ -232,7 +234,7 @@ class GliaVoiceService : Service() {
                                 if (phase == ListeningPhase.AWAITING_THOUGHT) {
                                     "ouvindo pensamento"
                                 } else {
-                                    "microfone ligado — diga um comando"
+                                    "microfone ligado — ouvindo tudo"
                                 }
                             )
                         }
@@ -275,8 +277,13 @@ class GliaVoiceService : Service() {
                         "Reconhecimento de fala indisponível neste aparelho"
                     )
                 } else {
-                    val answer = withTimeoutOrNull(timeoutMs) { result.await() }
-                        ?: ListenOutcome(null, SttRetryPolicy.SPEECH_TIMEOUT_CODE, "nenhuma fala detectada")
+                    val answer = withTimeoutOrNull(ContinuousListenPolicy.LISTEN_TIMEOUT_MS) {
+                        result.await()
+                    } ?: ListenOutcome(
+                        null,
+                        SttRetryPolicy.SPEECH_TIMEOUT_CODE,
+                        "nenhuma fala detectada"
+                    )
                     if (token == listenGeneration && result.isActive) {
                         listenGeneration++
                         stt.cancel()
@@ -302,27 +309,45 @@ class GliaVoiceService : Service() {
     }
 
     /**
-     * Único loop de microfone. Não há janela de silêncio entre as escutas: após
-     * qualquer resultado (inclusive silêncio), a próxima começa na mesma thread.
+     * Único modo de operação: com o tile ligado o áudio fica aberto sem
+     * intervalos. Cada janela é reconhecida na sequência e transcrições
+     * repetidas pela sobreposição são descartadas.
      */
     private fun startContinuousListening() {
         if (shuttingDown || !GliaPrefs.isTileActive(this) || listenJob?.isActive == true) return
         wakeLock = acquireLock(wakeLock, "glia:mic")
         phase = ListeningPhase.IDLE
-        GliaState.setMode(GliaMode.IDLE)
+        GliaState.setMode(GliaMode.LISTENING)
         GliaState.setPartial("")
-        GliaState.setAssistantStatus("microfone ligado")
-        updateNotification("Microfone ligado — diga um comando")
+        GliaState.setAssistantStatus("microfone ligado — ouvindo tudo")
+        updateNotification("Microfone ligado — ouvindo tudo")
+        transcriptDeduper.reset()
         listenJob = scope.launch {
-            while (isActive && !shuttingDown && GliaPrefs.isTileActive(this@GliaVoiceService)) {
-                val heard = listenOnce(ContinuousListenPolicy.LISTEN_TIMEOUT_MS)
-                if (!isActive || shuttingDown) break
-                val delayMs = ContinuousListenPolicy.RESTART_DELAY_MS
-                if (delayMs > 0) delay(delayMs)
-                if (!heard.isNullOrBlank()) dispatch(heard)
+            try {
+                withContext(Dispatchers.IO) {
+                    amplifiedMic.start(GliaPrefs.micGain(this@GliaVoiceService))
+                }
+                while (isActive && !shuttingDown && GliaPrefs.isTileActive(this@GliaVoiceService)) {
+                    val window = withContext(Dispatchers.IO) { amplifiedMic.nextWindow() }
+                        ?: break
+                    val heard = recognizeWindow(window)
+                    if (!isActive || shuttingDown) break
+                    if (!heard.isNullOrBlank() &&
+                        transcriptDeduper.accept(heard, SystemClock.elapsedRealtime())
+                    ) {
+                        dispatch(heard)
+                    }
+                    val delayMs = ContinuousListenPolicy.RESTART_DELAY_MS
+                    if (delayMs > 0) delay(delayMs)
+                }
+            } catch (error: Exception) {
+                Log.e(TAG, "Falha no microfone contínuo", error)
+                GliaState.setLastError("Microfone: ${error.message ?: "falha interna"}")
+            } finally {
+                amplifiedMic.stop()
+                releaseLock(wakeLock)
+                wakeLock = null
             }
-            releaseLock(wakeLock)
-            wakeLock = null
         }
     }
 
@@ -354,7 +379,7 @@ class GliaVoiceService : Service() {
     }
 
     private suspend fun handleCommand(command: VoiceCommand) {
-        GliaState.setMode(GliaMode.THINKING)
+        GliaState.setAssistantStatus("preparando resposta")
         GliaState.setResponse("")
         if (command is VoiceCommand.StartCognitiveOffload) {
             phase = ListeningPhase.AWAITING_THOUGHT
@@ -373,14 +398,14 @@ class GliaVoiceService : Service() {
         notes.add(text)
         val confirmation = "Certo, armazenei seus pensamentos. Foi bom pensar com você."
         GliaState.setResponse(confirmation)
-        GliaState.setMode(GliaMode.THINKING)
+        GliaState.setAssistantStatus("preparando resposta")
         speakAndWait(confirmation, 45_000L)
         openNotes()
     }
 
     private suspend fun speakAndWait(text: String, timeoutMs: Long) {
         if (text.isBlank() || shuttingDown) return
-        GliaState.setMode(GliaMode.SPEAKING)
+        GliaState.setAssistantStatus("falando")
         tts.speak(text)
         val readyDeadline = SystemClock.elapsedRealtime() + 90_000L
         while (!tts.isReady() && SystemClock.elapsedRealtime() < readyDeadline) delay(100)
@@ -389,6 +414,15 @@ class GliaVoiceService : Service() {
             delay(100)
         }
         if (tts.isSpeaking()) tts.stop()
+        if (!shuttingDown) {
+            GliaState.setAssistantStatus(
+                if (GliaPrefs.isTileActive(this)) {
+                    "microfone ligado — ouvindo tudo"
+                } else {
+                    "desligada"
+                }
+            )
+        }
     }
 
     private suspend fun testTts() {
@@ -408,17 +442,21 @@ class GliaVoiceService : Service() {
         scope.launch(Dispatchers.Main) { stt.cancel() }
         if (stopTts) tts.stop()
         phase = ListeningPhase.IDLE
-        GliaState.setMode(GliaMode.IDLE)
+        GliaState.setMode(
+            if (GliaPrefs.isTileActive(this)) GliaMode.LISTENING else GliaMode.IDLE
+        )
         GliaState.setPartial("")
     }
 
     private fun stopEverything() {
         shuttingDown = true
         cancelWork(stopTts = true)
+        amplifiedMic.stop()
         scope.launch(Dispatchers.Main) { stt.destroy() }
         releaseLock(wakeLock)
         wakeLock = null
         GliaState.setAssistantStatus("desligada")
+        GliaState.setMode(GliaMode.IDLE)
         GliaState.setPartial("")
         GliaState.setResponse("")
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -546,6 +584,7 @@ class GliaVoiceService : Service() {
         shuttingDown = true
         listenJob?.cancel()
         commandJob?.cancel()
+        amplifiedMic.stop()
         scope.launch(Dispatchers.Main) { stt.destroy() }
         tts.shutdown()
         serviceJob.cancel()

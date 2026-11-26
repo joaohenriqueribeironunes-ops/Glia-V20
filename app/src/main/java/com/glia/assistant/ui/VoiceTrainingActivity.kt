@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.glia.assistant.core.GliaPrefs
+import com.glia.assistant.stt.AmplifiedAudioSource
 import com.glia.assistant.stt.AmplifiedMic
 import com.glia.assistant.voice.VoicePrintLayout
 import com.glia.assistant.voice.VoicePrintMath
@@ -88,18 +89,18 @@ fun VoiceTrainingScreen(activity: VoiceTrainingActivity) {
         status = "Ouvindo... diga a frase em voz alta."
         scope.launch {
             val stored = withContext(Dispatchers.IO) {
-                var source = runCatching {
-                    AmplifiedMic(ctx).capture(8_000L, GliaPrefs.micGain(ctx))
-                }.getOrNull()
+                val recorder = AmplifiedMic(ctx)
+                var source: AmplifiedAudioSource? = null
                 try {
-                    val audio = source ?: return@withContext false
-                    val embedding = store.embeddingFromPcm(audio.file) ?: return@withContext false
+                    recorder.start(GliaPrefs.micGain(ctx))
+                    source = recorder.nextWindow() ?: return@withContext false
+                    val embedding = store.embeddingFromPcm(source!!.file) ?: return@withContext false
                     store.addSample(embedding)
                 } catch (_: Exception) {
                     false
                 } finally {
                     source?.close()
-                    source = null
+                    recorder.stop()
                 }
             }
             busy = false

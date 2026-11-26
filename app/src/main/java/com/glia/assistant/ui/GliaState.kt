@@ -4,7 +4,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class GliaMode { IDLE, LISTENING, THINKING, SPEAKING }
+/** Único modo ativo: LISTENING. IDLE existe somente com o tile desligado. */
+enum class GliaMode { IDLE, LISTENING }
 
 object GliaState {
     private val _mode = MutableStateFlow(GliaMode.IDLE)

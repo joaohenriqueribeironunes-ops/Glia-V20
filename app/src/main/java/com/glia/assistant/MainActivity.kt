@@ -228,12 +228,10 @@ fun MainScreen(activity: MainActivity, tileActive: Boolean) {
         Spacer(Modifier.height(14.dp))
         HyperIsland(
             label = when (mode) {
-                GliaMode.IDLE -> if (tileActive) "Glia pronta" else "Glia desligada"
+                GliaMode.IDLE -> "Glia desligada"
                 GliaMode.LISTENING -> "Glia ouvindo"
-                GliaMode.THINKING -> "Glia pensando"
-                GliaMode.SPEAKING -> "Glia falando"
             },
-            active = tileActive || mode != GliaMode.IDLE,
+            active = mode == GliaMode.LISTENING || tileActive,
             amplitude = amp,
             onClick = { activity.toggleTile() }
         )
@@ -244,15 +242,13 @@ fun MainScreen(activity: MainActivity, tileActive: Boolean) {
                 .height(230.dp),
             contentAlignment = Alignment.Center
         ) {
-            OrbView(amplitude = amp, pulse = pulse, mode = mode, tileActive = tileActive)
+            OrbView(amplitude = amp, pulse = pulse, mode = mode)
         }
 
         Text(
             text = when (mode) {
-                GliaMode.IDLE -> if (tileActive) "Diga um comando" else "Ative o tile para ouvir"
-                GliaMode.LISTENING -> "Ouvindo..."
-                GliaMode.THINKING -> "Preparando..."
-                GliaMode.SPEAKING -> "Falando..."
+                GliaMode.IDLE -> "Ative o tile para ouvir"
+                GliaMode.LISTENING -> "Ouvindo tudo..."
             },
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onBackground,
@@ -412,12 +408,11 @@ private fun StatusLine(label: String, value: String, color: Color) {
 }
 
 @Composable
-fun OrbView(amplitude: Float, pulse: Float, mode: GliaMode, tileActive: Boolean) {
+fun OrbView(amplitude: Float, pulse: Float, mode: GliaMode) {
     val core = when (mode) {
-        GliaMode.LISTENING -> GliaAccent.Teal
-        GliaMode.THINKING -> GliaAccent.Lavender
-        GliaMode.SPEAKING -> GliaAccent.Purple
-        GliaMode.IDLE -> if (tileActive) GliaAccent.PurpleDeep else Color(0xFF6E6A80)
+        // Um único modo ativo, sempre roxo: não existe mais o modo azul separado.
+        GliaMode.LISTENING -> GliaAccent.PurpleDeep
+        GliaMode.IDLE -> Color(0xFF6E6A80)
     }
     Canvas(modifier = Modifier.fillMaxSize(0.86f)) {
         val center = Offset(size.width / 2, size.height / 2)

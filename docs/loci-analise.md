@@ -53,7 +53,7 @@ mesma fonte verificada (`prism-ml/Ternary-Bonsai-2-4B-gguf`, commit
 `50ebba61be85e5be07e8083db468ace0fc1bac43`) e instalado por ADB/debug `run-as` porque
 o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
 
-## Situação na V21/V22/V23/V24/V25/V26/V27/V28/V29/V30
+## Situação na V21/V22/V23/V24/V25/V26/V27/V28/V29/V30/V31
 
 - Pacote `llm/`, `GliaMemory`, `MemoryBudget`, `llama.cpp`, `CMakeLists.txt`, testes de
   GGUF/budget e configurações de inferência foram removidos.
@@ -94,4 +94,10 @@ o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
   reconhecido diretamente, mesmo dito baixo; saudações e cortesias são removidas antes
   do parser e “Glia” sozinha é ignorada. A suíte permaneceu em 84 testes puros (os
   6 testes do detector antigo foram substituídos por 6 do comando secundário). APK de
-  94.072.248 bytes. Nenhum código ou asset do Loci foi copiado em nenhuma versão.
+  94.072.248 bytes.
+- A V31 removeu o detector de fala e o modo azul: um único `AudioRecord` fica aberto
+  desde o tile e gera janelas contínuas de 3 s com 500 ms de sobreposição, com dedupe
+  de transcrições e buffer circular próprio. A interface passou a ter apenas o modo
+  roxo de escuta; “pensando” e “falando” viraram texto de status. A suíte foi para
+  88 testes puros em 17 classes. APK de 94.071.620 bytes. Nenhum código ou asset do
+  Loci foi copiado em nenhuma versão.
