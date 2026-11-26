@@ -19,6 +19,19 @@
 
 - Ciclo de vida do modelo (warm start, swap), pré-carregamento.
 
+## Tentativa de leitura via ADB (device do usuário)
+
+O usuário escolheu conectar o Redmi Note 11S **via USB**. Até o momento:
+- `adb devices -l` retorna apenas `List of devices attached` (vazio), mesmo após
+  `adb kill-server` / `adb start-server`.
+- Nenhum dispositivo Android aparece em `Get-PnpDevice -PresentOnly` no Windows,
+  portanto a porta USB/atuação de depuração ainda não foi detectada.
+- `scripts/scan_loci_adb.ps1` foi adicionado: quando o device estiver autorizado,
+  ele localiza pacotes com `loci`, faz `pm path`, `adb pull` dos APKs/splits e salva
+  `dumpsys package` em `%TEMP%\opencode\loci-scan`.
+
+A análise real (REA sobre o APK extraído) fica bloqueada até a autorização ADB.
+
 ## Limitações
 
 - REA/UREA indisponíveis no ambiente; substituições usadas: inspeção estática via
