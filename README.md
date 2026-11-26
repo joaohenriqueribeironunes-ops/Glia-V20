@@ -1,9 +1,10 @@
 # Glia — Assistente de voz determinística (Android)
 
-Glia V25 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
+Glia V26 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
 Os comandos e a síntese de voz rodam no aparelho; o reconhecimento de fala usa o motor
 do sistema Android, alimentado por PCM amplificado quando o fabricante aceita essa
-entrada, com preferência por processamento offline quando disponível.
+entrada, com preferência por processamento offline quando disponível. Opcionalmente,
+um modelo local de impressão de voz limita as respostas somente à voz treinada.
 
 ## Stack
 
@@ -15,8 +16,10 @@ entrada, com preferência por processamento offline quando disponível.
   `AudioTrack`. Nada é sintetizado na nuvem.
 - Comandos: parser puro + `CommandEngine`, sem Ternary, sem GGUF e sem tool calling JSON.
 - Notas: arquivo TSV + Base64 no armazenamento privado, com escrita atômica.
+- Impressão de voz: 3D-Speaker CAM++ (`sherpa-onnx` 1.12.40), treino com 3 amostras
+  e verificação por similaridade de cosseno — tudo no aparelho.
 
-## Funcionalidades (V25)
+## Funcionalidades (V26)
 
 1. **Microfone contínuo**: o tile na central de controle liga/desliga o assistente.
    Enquanto estiver ligado, o microfone fica ativo e o reconhecimento reinicia
@@ -39,6 +42,9 @@ entrada, com preferência por processamento offline quando disponível.
    AGC/NoiseSuppressor do aparelho e limiter suave para não distorcer falas próximas.
    Se o fabricante não aceitar o PCM amplificado, o app volta automaticamente ao
    microfone do sistema.
+10. **Somente minha voz**: Configurações → Somente minha voz grava três frases suas,
+    extrai embeddings com CAM++ e passa a ignorar fala de outras pessoas. O rigor é
+    ajustável (0,35–0,75; padrão 0,55) e o treino pode ser apagado ou desativado.
 
 ## Compilar e testar
 
@@ -50,9 +56,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_all_tests.ps1
 ```
 
 APK release: `app/build/outputs/apk/release/app-release.apk`
-(**68.259.040 bytes / ~65,1 MB**; R8, assinatura local, somente `arm64-v8a`).
+(**94.068.464 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
 
-Suíte oficial: **52 testes JVM**, `OK (52 tests)` + `ALL_TESTS_OK`.
+Suíte oficial: **58 testes JVM**, `OK (58 tests)` + `ALL_TESTS_OK`.
 O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por isso
 `scripts/run_all_tests.ps1` roda JUnitCore com classpath explícito. Detalhes em
 `docs/testes.md`.
@@ -70,6 +76,21 @@ O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por is
 - A voz Dii é distribuída sob CC BY-NC-ND 4.0 (TigreGotico Lda) e o pacote sherpa
   sob CC BY-NC-SA 4.0: uso não comercial, sem derivações da voz e com atribuição.
 
+## Impressão de voz (somente minha voz)
+
+- Asset: `app/src/main/assets/glia-voiceprint.zip` — 25.801.265 bytes,
+  SHA-256 `68666cccffcd26c7cc0d58fa1e2e1330850eab57394ce51aa0e28af3e5e4625e`.
+- Modelo: `3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx`
+  (28.281.165 bytes, SHA-256
+  `53cab20ba8f2eb2f6e2d89ecc18e88ef3222169b61b4419cbc13666744a4574b`, 16 kHz).
+- Origem: projeto [3D-Speaker](https://github.com/modelscope/3D-Speaker),
+  licença Apache 2.0; exportação ONNX mantida por `csukuangfj/speaker-embedding-models`.
+- `VoicePrintModelStore.ensureModel()` valida o zip e o modelo antes de publicar em
+  `filesDir/glia-voiceprint`; `VoicePrintStore` guarda até 8 embeddings no
+  armazenamento privado e usa `SpeakerEmbeddingExtractor` do AAR já embarcado.
+- Cada escuta gera um embedding do PCM capturado. Se o filtro estiver ativo, apenas
+  similaridade ≥ rigor autoriza wake word e comandos; falha de extração nega o comando.
+
 ## Permissões MIUI / HyperOS
 
 Microfone, calendário, notificações, `WAKE_LOCK`, `VIBRATE`, overlay e tile. Para o
@@ -86,8 +107,13 @@ ativado.
   para todos os fabricantes — nesses casos a Glia usa o microfone padrão.
 - Ativação com tela bloqueada depende de o `SpeechRecognizer` do sistema conseguir
   captar áudio nesse estado; isso ainda precisa de validação em aparelho.
+- O filtro “somente minha voz” depende de treino com boa iluminação sonora e do
+  microfone do aparelho; rigor muito alto pode rejeitar a voz do dono. Ele não é uma
+  prova de identidade e pode ser burlado por gravações.
+- O APK cresceu para ~89,7 MB por causa do modelo de voz (~25,8 MB comprimido).
 - Device de desenvolvimento desconectado na validação final: falta confirmar em runtime
-  wake word com tela bloqueada, lanterna, abertura de apps e calendário real.
+  wake word com tela bloqueada, lanterna, abertura de apps, calendário real e a taxa
+  de aceitação/rejeição da impressão de voz.
 - HyperOS bloqueia injeção de input por ADB (`INJECT_EVENTS`); a validação de toque é manual.
 
 ## Documentação
@@ -96,4 +122,4 @@ ativado.
 - `docs/benchmarks.md` — versão, tamanho do APK e estado da medição.
 - `docs/loci-analise.md` — registro histórico da análise que motivou a V20; a V21
   removeu completamente o LLM/Ternary e não copiou código ou assets do Loci.
-- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V25.
+- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V26.

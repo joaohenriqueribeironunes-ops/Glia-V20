@@ -10,6 +10,8 @@ object GliaPrefs {
     const val KEY_TILE_ACTIVE = "tile_active"
     const val KEY_TILE_SUBTITLE = "tile_subtitle"
     const val KEY_MIC_GAIN = "mic_gain"
+    const val KEY_VOICE_LOCK_ENABLED = "voice_lock_enabled"
+    const val KEY_VOICE_THRESHOLD = "voice_threshold"
 
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -35,5 +37,27 @@ object GliaPrefs {
     fun setMicGain(context: Context, gain: Float) {
         val value = com.glia.assistant.stt.MicGain.clamp(gain)
         prefs(context).edit().putFloat(KEY_MIC_GAIN, value).apply()
+    }
+
+    /** V26: responde somente à voz treinada quando ativado. */
+    fun voiceLockEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_VOICE_LOCK_ENABLED, false)
+
+    fun setVoiceLockEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_VOICE_LOCK_ENABLED, enabled).apply()
+    }
+
+    /** Limite de similaridade (0.35..0.75; padrão 0.55). */
+    fun voiceThreshold(context: Context): Float =
+        com.glia.assistant.voice.VoicePrintMath.clampThreshold(
+            prefs(context).getFloat(
+                KEY_VOICE_THRESHOLD,
+                com.glia.assistant.voice.VoicePrintMath.DEFAULT_THRESHOLD
+            )
+        )
+
+    fun setVoiceThreshold(context: Context, threshold: Float) {
+        val value = com.glia.assistant.voice.VoicePrintMath.clampThreshold(threshold)
+        prefs(context).edit().putFloat(KEY_VOICE_THRESHOLD, value).apply()
     }
 }

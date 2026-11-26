@@ -16,7 +16,7 @@ import java.io.FileOutputStream
 /** Áudio PCM já amplificado, pronto para ser passado ao SpeechRecognizer. */
 class AmplifiedAudioSource(
     val descriptor: ParcelFileDescriptor,
-    private val file: File,
+    val file: File,
     val sampleRate: Int,
     val channelCount: Int,
     val encoding: Int

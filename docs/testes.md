@@ -1,11 +1,11 @@
-# Testes rigorosos — Glia V25
+# Testes rigorosos — Glia V26
 
 Objeto: validar o motor determinístico de comandos, as notas, a correspondência de
-apps e o asset da voz neural sem depender de toque na UI (HyperOS bloqueia
-`INJECT_EVENTS`) nem de device conectado. Toda a lógica crítica foi extraída para
-código puro (JVM) e é coberta por testes determinísticos. A V25 não tem LLM, Vosk,
-C++ próprio nem testes nativos; a política de retry, a escuta contínua e o ganho do
-microfone também são testados isoladamente.
+apps, os assets da voz neural e da impressão de voz sem depender de toque na UI
+(HyperOS bloqueia `INJECT_EVENTS`) nem de device conectado. Toda a lógica crítica foi
+extraída para código puro (JVM) e é coberta por testes determinísticos. A V26 não tem
+LLM, Vosk, C++ próprio nem testes nativos; a política de retry, a escuta contínua, o
+ganho do microfone e a matemática da impressão de voz também são testados isoladamente.
 
 ## Como executar
 
@@ -20,11 +20,11 @@ O script:
 1. compila `:app:compileDebugUnitTestKotlin --offline`;
 2. monta classpath explícito (classes de teste + classes do app + junit 4.13.2 +
    hamcrest 1.3 + kotlin-stdlib 2.0.21 + android.jar);
-3. executa `org.junit.runner.JUnitCore` com as 9 classes de teste listadas no script.
+3. executa `org.junit.runner.JUnitCore` com as 10 classes de teste listadas no script.
 
-Resultado observado: `BUILD SUCCESSFUL`, `OK (52 tests)`, `ALL_TESTS_OK`, exit 0.
+Resultado observado: `BUILD SUCCESSFUL`, `OK (58 tests)`, `ALL_TESTS_OK`, exit 0.
 
-## Suíte JVM (52 testes)
+## Suíte JVM (58 testes)
 
 | Classe | O que cobre |
 |---|---|
@@ -37,6 +37,7 @@ Resultado observado: `BUILD SUCCESSFUL`, `OK (52 tests)`, `ALL_TESTS_OK`, exit 0
 | `stt.SttRetryPolicyTest` | `ERROR_CLIENT` (2) e `ERROR_AUDIO` (3) disparam retry; primeira tentativa é amplificada/offline, segunda amplificada/online e terceira com microfone padrão; erros silenciosos 5/6/8 não poluem o último erro |
 | `stt.ContinuousListenPolicyTest` | Timeout de 30 s, reinício imediato (0 ms) e ignorar transcrições enquanto a Glia fala |
 | `stt.MicGainTest` | Limites 1x–4x, amplificação sem clipping e RMS para separar silêncio de fala |
+| `voice.VoicePrintMathTest` | Limiar 0,35–0,75, média de embeddings, cosseno, `isOwner` e encode/decode VP10 com validação de NaN/Inf e corrupção |
 
 ## Limitação conhecida
 
@@ -50,7 +51,8 @@ testes instrumentados (`androidTest`); a validação em device depende de execu�
 
 ## Validação pendente em device
 
-Com o Redmi Note 11S conectado, validar manualmente: wake word “Olá Glia” com tela
-bloqueada (usando `SpeechRecognizer` do sistema, com e sem PCM amplificado), ganho
-ajustável, lanterna, abertura de aplicativos por voz, consulta real ao calendário,
+Com o Redmi Note 11S conectado, validar manualmente: treino das três frases em
+Configurações → Somente minha voz, rejeição da voz de outra pessoa, wake word “Olá Glia”
+com tela bloqueada (usando `SpeechRecognizer` do sistema, com e sem PCM amplificado),
+ganho ajustável, lanterna, abertura de aplicativos por voz, consulta real ao calendário,
 qualidade da voz feminina neural e persistência das notas após reinício.

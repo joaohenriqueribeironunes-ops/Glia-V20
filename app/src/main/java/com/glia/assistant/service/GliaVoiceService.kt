@@ -34,6 +34,7 @@ import com.glia.assistant.tts.GliaTts
 import com.glia.assistant.ui.GliaMode
 import com.glia.assistant.ui.GliaState
 import com.glia.assistant.ui.NotesActivity
+import com.glia.assistant.voice.VoicePrintStore
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
@@ -60,6 +61,7 @@ class GliaVoiceService : Service() {
         const val ACTION_START_LISTENING = "com.glia.assistant.START_LISTENING"
         const val ACTION_STOP = "com.glia.assistant.STOP"
         const val ACTION_TEST_TTS = "com.glia.assistant.TEST_TTS"
+        private const val VOICE_REJECTED_CODE = -2
 
         @Volatile
         var instance: GliaVoiceService? = null
@@ -77,6 +79,7 @@ class GliaVoiceService : Service() {
 
     private lateinit var stt: SystemStt
     private lateinit var amplifiedMic: AmplifiedMic
+    private lateinit var voicePrint: VoicePrintStore
     private lateinit var tts: GliaTts
     private lateinit var commandEngine: CommandEngine
     private lateinit var notes: CognitiveNotesStore
@@ -95,6 +98,7 @@ class GliaVoiceService : Service() {
         createNotificationChannel()
         stt = SystemStt(this)
         amplifiedMic = AmplifiedMic(this)
+        voicePrint = VoicePrintStore(this)
         tts = GliaTts(this)
         commandEngine = CommandEngine(this)
         notes = CognitiveNotesStore(this)
@@ -164,6 +168,7 @@ class GliaVoiceService : Service() {
                 useAmplifiedSource = SttRetryPolicy.useAmplifiedSource(attempt)
             )
             if (outcome.text != null) return outcome.text
+            if (outcome.errorCode == VOICE_REJECTED_CODE) return null
             val code = outcome.errorCode ?: continue
             if (SttRetryPolicy.shouldRetry(code) && attempt < SttRetryPolicy.MAX_ATTEMPTS - 1) {
                 withContext(Dispatchers.Main) { stt.reset() }
@@ -191,29 +196,31 @@ class GliaVoiceService : Service() {
             )
         }
 
+        // Sempre capturamos PCM: ele alimenta o reconhecedor (quando aceito) e
+        // também a verificação da voz treinada, inclusive no fallback.
         var source: AmplifiedAudioSource? = null
-        if (useAmplifiedSource) {
-            val captured = withContext(Dispatchers.IO) {
-                runCatching {
-                    amplifiedMic.capture(
-                        timeoutMs,
-                        GliaPrefs.micGain(this@GliaVoiceService)
-                    )
-                }
-            }
-            val audio = captured.getOrNull()
-            if (captured.isFailure) {
-                // Fabricante sem suporte a EXTRA_AUDIO_SOURCE: usa o microfone padrão.
-                Log.w(TAG, "Captura amplificada falhou; usando microfone do sistema", captured.exceptionOrNull())
-            } else if (audio == null) {
-                return ListenOutcome(
-                    null,
-                    SttRetryPolicy.SPEECH_TIMEOUT_CODE,
-                    "nenhuma fala detectada"
-                )
-            } else {
-                source = audio
-            }
+        var fromOwner = true
+        val gain = if (useAmplifiedSource) {
+            GliaPrefs.micGain(this@GliaVoiceService)
+        } else {
+            com.glia.assistant.stt.MicGain.DEFAULT
+        }
+        val captured = withContext(Dispatchers.IO) {
+            runCatching { amplifiedMic.capture(timeoutMs, gain) }
+        }
+        val audio = captured.getOrNull()
+        if (captured.isFailure) {
+            // Fabricante sem suporte a EXTRA_AUDIO_SOURCE: usa o microfone padrão.
+            Log.w(TAG, "Captura amplificada falhou; usando microfone do sistema", captured.exceptionOrNull())
+        } else if (audio == null) {
+            return ListenOutcome(
+                null,
+                SttRetryPolicy.SPEECH_TIMEOUT_CODE,
+                "nenhuma fala detectada"
+            )
+        } else {
+            fromOwner = withContext(Dispatchers.IO) { voicePrint.verify(audio.file) }
+            if (useAmplifiedSource) source = audio else audio.close()
         }
 
         return withContext(Dispatchers.Main) {
@@ -232,7 +239,7 @@ class GliaVoiceService : Service() {
                     override fun onPartial(text: String) {
                         if (token != listenGeneration) return
                         if (mode == GliaMode.LISTENING) GliaState.setPartial(text)
-                        if (mode == GliaMode.IDLE && !tts.isSpeaking() && isWakeWord(text)) {
+                        if (fromOwner && mode == GliaMode.IDLE && !tts.isSpeaking() && isWakeWord(text)) {
                             triggerWake(text)
                         }
                     }
@@ -246,7 +253,13 @@ class GliaVoiceService : Service() {
                     override fun onResult(text: String) {
                         if (token != listenGeneration) return
                         listenGeneration++
-                        result.complete(ListenOutcome(text.ifBlank { null }))
+                        result.complete(
+                            if (!fromOwner) {
+                                ListenOutcome(null, VOICE_REJECTED_CODE, "voz não reconhecida")
+                            } else {
+                                ListenOutcome(text.ifBlank { null })
+                            }
+                        )
                     }
 
                     override fun onError(code: Int, message: String) {

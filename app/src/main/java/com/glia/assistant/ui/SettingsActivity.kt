@@ -211,6 +211,27 @@ fun SettingsScreen(activity: SettingsActivity) {
             )
         }
 
+        SettingsCard("Somente minha voz", "Treino local para responder apenas à sua voz.") {
+            val voiceStore = remember { com.glia.assistant.voice.VoicePrintStore(ctx) }
+            val enrolled = voiceStore.isEnrolled()
+            val locked = GliaPrefs.voiceLockEnabled(ctx)
+            Text(
+                "Treino: ${if (enrolled) "${voiceStore.samples().size} amostras" else "não treinado"} · " +
+                    "Filtro: ${if (locked) "ativo" else "inativo"}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(10.dp))
+            HyperTile(
+                icon = { GliaGlyph("mic", MaterialTheme.colorScheme.primary, Modifier.size(18.dp)) },
+                label = "Treinar minha voz",
+                caption = "3 amostras · modelo local 3D-Speaker",
+                active = locked,
+                accent = GliaAccent.Lavender,
+                onClick = { activity.startActivity(Intent(ctx, VoiceTrainingActivity::class.java)) },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
         SettingsCard("Pensamentos", "Bloco de notas do descarregamento cognitivo.") {
             Text(
                 "Você tem ${notes.count()} pensamentos guardados.",
@@ -254,7 +275,7 @@ fun SettingsScreen(activity: SettingsActivity) {
 }
 
 @Composable
-private fun SettingsCard(title: String, subtitle: String, content: @Composable () -> Unit) {
+fun SettingsCard(title: String, subtitle: String, content: @Composable () -> Unit) {
     GlassCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
