@@ -17,6 +17,6 @@ class GliaApplication : Application() {
             ).apply { description = "Servico de voz da Glia em segundo plano" }
             (getSystemService(NotificationManager::class.java)).createNotificationChannel(channel)
         }
-        // A extracao do modelo embutido ocorre em background no GliaVoiceService (ModelStore).
+        // A extracao do Vosk embutido ocorre em background no GliaVoiceService.
     }
 }

@@ -1,160 +1,63 @@
-# Análise do Loci — REA, achados e mapeamento no Glia V20.2
+# Análise do Loci — registro histórico (V20.x)
 
-> Objetivo do usuário: "destrinche o 'Loci' com o REA e use toda a lógica de comunicação
-> entre a base do app e o Ternary Bonsai 2 4B já instalado ... da maneira mais rápida e
-> principalmente 'Otimizada possível'."
+> Esta análise foi feita na linha V20 para investigar o modelo Ternary Bonsai 2 4B.
+> A V21 removeu completamente o LLM do Glia. Nenhum código, asset ou arquivo do Loci
+> foi copiado para o Glia; apenas padrões observados foram reinterpretados em código próprio.
 
 ## Alvo e evidência
 
 O dispositivo Redmi Note 11S (`9XCAROHMCY65I7MB`, `model:2201117SI`) foi conectado
-via ADB e autorizado. O app Loci está instalado como `app.lociai.loci`. O REA
-`pull_adb_package` extraiu o pacote com cobertura completa
-(`ev_0889750928dee842e65014a5c942e55f27ed13f2c66e71cdcc8693e614129b43`) para
-`%TEMP%\opencode\loci-apk-pull\app.lociai.loci\`:
+via ADB e autorizado. O app Loci (`app.lociai.loci`) foi extraído com REA
+(`pull_adb_package`, cobertura `ev_0889750928dee842e65014a5c942e55f27ed13f2c66e71cdcc8693e614129b43`).
 
 | Arquivo | Tamanho | SHA-256 |
 |---|---:|---|
-| base.apk | 33.956.351 | 42835456a63289bd8da556a44fc96baab7974c59ca89571f797b40095c28ffc1 |
-| split_config.arm64_v8a.apk | 36.927.823 | 1acb3b491c76f4190651f796c231363d1e84dfc2b28dc0dd3c7a3937059c6901 |
+| base.apk | 33.956.351 | `42835456a63289bd8da556a44fc96baab7974c59ca89571f797b40095c28ffc1` |
+| split_config.arm64_v8a.apk | 36.927.823 | `1acb3b491c76f4190651f796c231363d1e84dfc2b28dc0dd3c7a3937059c6901` |
 | split_config.pt.apk | 237.977 | — |
 | split_config.xxhdpi.apk | 70.845 | — |
 
-`inspect_android_package` não pôde ser executado: `REA_JADX_MCP_JAR` não configurado
-e nenhum `jadx*.jar` foi encontrado. `decode_android_resources` também ficou
-indisponível (apktool fora do PATH). Ghidra não está configurado e, neste Windows,
-não aceita ELF arm64; IDA/Kuna/Hopper também indisponíveis. Por isso a leitura de
-código Java/Kotlin foi feita com `dexdump -l plain` sobre os DEX extraídos do APK,
-complementada por strings ASCII do `libloci_llama_jni.so`.
+JADX/REA Android, apktool, Ghidra, IDA/Kuna/Hopper não estavam disponíveis; a leitura
+foi feita com `dexdump -l plain` sobre os DEX e strings de `libloci_llama_jni.so`.
+Trata-se de evidência estática: nenhuma execução do Loci foi instrumentada.
 
-**Limitação importante:** trata-se de evidência estática. Nenhuma execução do Loci
-foi instrumentada com Frida; nenhum código ou asset do Loci foi copiado para o Glia.
+## Achados observados
 
-## Observações (DEX + biblioteca nativa)
+Classes: `NativeLlamaBridge`, `LlamaInferenceService`, `NativeAllocationCallback`,
+`NativeLlamaTokenCallback`. APIs nativas incluíam `nativeCreateWithMemoryBudget`,
+`nativePrefill`, `nativeCanResume`, `nativePushKvSnapshot`, `nativeGenerate`,
+`nativeStop`, `nativeCountTokens` e `nativeLastGenerationStats`.
 
-Classes Loci relevantes:
-- `com.mwaldman.loci.domain.inference.NativeLlamaBridge`
-- `com.mwaldman.loci.domain.inference.LlamaInferenceService`
-- `com.mwaldman.loci.domain.inference.NativeAllocationCallback`
-- `com.mwaldman.loci.domain.inference.NativeLlamaTokenCallback`
+Configuração observada: `gpuLayers=99`, `preferGpu=false`,
+`residencySystemHeadroomBytes=1342177280`, `decodeThreads`, `prefillThreads`,
+`kvCacheBytes`, `kvTypeK/V`, `flashAttentionType`. Símbolos confirmados incluem
+`llama_model_load_from_file`, `llama_flash_attn_type_name`, `ggml_backend_dev_by_type`
+e samplers `top_k/top_p/min_p/temp/dist/greedy`.
 
-API nativa observada no DEX inclui: `nativeCreateWithMemoryBudget`, `nativePrefill`,
-`nativePromotePrefill`, `nativeCanResume`, `nativeCanRewindPrefix`,
-`nativePushKvSnapshot`/`nativePopKvSnapshot`, `nativeSaveConversationKvState`,
-`nativeShedContext`, `nativeGenerate`, `nativeResumeGeneration`, `nativeStop`,
-`nativeCountTokens`, `nativeLastGenerationStats`, `nativePrefillProgress`,
-`nativeCurrentCoreResidency`, `nativeResidencyStats`, `nativeSystemInfo`,
-`nativeCpuFeatures`, `nativeLoadMultimodalProjector`.
+Interpretação: o Loci separava prefill e decode, usava CPU com threadpool, KV `q8_0`
+com fallback F16 e admissão por memória disponível com headroom de ~1,25 GiB.
 
-Strings/configuração observadas:
-- `gpuLayers=99, preferGpu=false, residencySystemHeadroomBytes=1342177280`
-- `decodeThreads`, `prefillThreads`, `numOfThreads`
-- `kvCacheBytes`, `kvTypeK/V`, `headCountKv`, `flashAttentionType`
-- `retainedBytes`, `reusedPrefixTokens`, `admittedContextTokens`, `safePromptLimitTokens`
-- `Bonsai 2 4B` e a descrição "Best-in-class quality under 1 GB..." (texto do modelo no app)
+## Mapeamento no Glia V20 (implementação própria)
 
-Símbolos reais confirmados em `libloci_llama_jni.so`: `llama_model_load_from_file`,
-`llama_init_from_model`, `llama_attach_threadpool`, `ggml_threadpool_new`,
-`ggml_threadpool_params_default`, `llama_memory_clear`, `llama_state_seq_get_data/set_data`,
-`llama_sampler_init_penalties/top_k/top_p/min_p/temp/dist/greedy`, `llama_n_threads`,
-`llama_n_threads_batch`, `llama_tokenize`, `llama_batch_get_one`, `llama_decode`,
-`llama_get_logits_ith`, `llama_model_chat_template`, `ggml_backend_load_all_from_path`,
-`ggml_backend_dev_by_type`, `llama_flash_attn_type_name`.
-
-Logs nativos observados:
-- `prefill done: tokens=%zu reused=%zu`
-- `generate done: ... prefill_ms=%lld decode_ms=%lld pacing_ms=%lld tps=%.2f`
-- `residency preload/post-load gate: ... available=... margin=... reserve=... budget=... decision=...`
-- `Context creation failed with q8_0 KV; retrying with F16 defaults`
-- `Native model allocations exceed available memory. (native_memory_budget_exceeded)`
-
-## Interpretação (inferência, não observação de execução)
-
-O Loci separa prefill e decode em fases com estatísticas próprias, usa CPU com
-threadpool (`preferGpu=false`), KV cache `q8_0` com fallback para F16, admite ou
-recusa a carga conforme memória disponível com headroom de ~1,25 GiB, mantém
-snapshots de KV/conversação e mede TPS/latência dentro do motor nativo.
-
-## Mapeamento para o Glia V20.2 (implementado, sem copiar código)
-
-| Padrão observado no Loci | Implementação própria no Glia | Arquivo |
+| Padrão observado | Implementação V20 | Arquivos (removidos na V21) |
 |---|---|---|
-| CPU com `n_threads` / `n_threads_batch` | já existia; mantido | `llama_jni.cpp` |
-| KV `q8_0` com fallback F16 + flash attention | `make_context(quantized_kv)` usa `GGML_TYPE_Q8_0`, `LLAMA_FLASH_ATTN_TYPE_ENABLED` e recai para F16 se `llama_init_from_model` falhar | `llama_jni.cpp` |
-| Stats `prefill_ms` / `decode_ms` / `tps` | `nativeLastGenerationStats()` publica `[promptTokens, generatedTokens, prefillMs, decodeMs, tpsX100, reusedPrefixTokens]`; UI mostra `prefill ... decode ... tok/s` | `llama_jni.cpp`, `LlamaBridge.kt`, `GliaState.kt`, `GliaVoiceService.kt` |
-| `nativeCountTokens` | exposto para diagnóstico de limite de contexto | `LlamaBridge.kt` |
-| Headroom de memória ~1,25 GiB | V20.4: `GliaMemory.plan()` usa `MemAvailable - 1,25 GiB - 256 MiB - modelSize`, reduz `n_ctx` e o JNI retorna `-4` se não couber | `GliaMemory.kt`, `llama_jni.cpp` |
-| mmap + KV limpo por geração | já existia; mantido | `llama_jni.cpp` |
+| CPU com `n_threads`/`n_threads_batch` | threadpool nativo próprio | `llama_jni.cpp` |
+| KV `q8_0` com fallback F16 | `make_context(quantized_kv)` | `llama_jni.cpp` |
+| `prefill_ms`/`decode_ms`/`tps` | publicado via JNI e mostrado na UI | `LlamaBridge.kt`, `GliaState.kt`, `GliaVoiceService.kt` |
+| Headroom de ~1,25 GiB | `GliaMemory.plan()` | `GliaMemory.kt`, `MemoryBudget.kt` |
+| Descoberta do GGUF | caminhos salvos, privados e Download público | `ModelStore.kt`, `ModelDiscovery.kt` |
 
-Não replicados nesta rodada (dependem de protocolo de estado mais amplo e não foram
-necessários para a comunicação voz→modelo): snapshots de KV entre conversas,
-`nativeResumeGeneration` e hotset de núcleos. `reusedPrefixTokens` é reportado como
-0 no Glia porque o prompt é reconstruído por turno.
+O modelo 4B (`Ternary-Bonsai-2-4B-Q2_0.gguf`, 1.212.103.520 bytes, SHA-256
+`64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4`) foi obtido da
+mesma fonte verificada (`prism-ml/Ternary-Bonsai-2-4B-gguf`, commit
+`50ebba61be85e5be07e8083db468ace0fc1bac43`) e instalado por ADB/debug `run-as` porque
+o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
 
-## Resultado do build
+## Situação na V21
 
-`:app:assembleDebug :app:assembleRelease --offline` passou com R8 e assinatura local.
-APK release final na versão V20.6 = **39.772.730 bytes (37,9 MB)**, com o modelo Vosk PT-BR embutido (o GGUF 4B continua fora do APK). O modelo 4B
-é instalado separadamente em `filesDir/user-model.gguf` (1.212.103.520 bytes).
-
-## Obtenção do modelo 4B a partir do Loci (V20.3)
-
-O Loci foi aberto via ADB com `loci://open_from_hf?model=prism-ml/Ternary-Bonsai-2-4B-gguf`.
-A DEX revelou o repositório HF e o arquivo `Ternary-Bonsai-2-4B-Q2_0.gguf` (commit
-`50ebba61be85e5be07e8083db468ace0fc1bac43`). O download do Loci fica em
-`/data/user/0/app.lociai.loci`, inacessível: `allowBackup=0`, app não debuggable, sem
-root e sem FILE_PROVIDER para modelos. Não foi possível ler esse arquivo por ADB.
-
-O **mesmo artefato verificado** foi obtido pela URL pública usada pelo Loci:
-- tamanho `1.212.103.520` bytes;
-- SHA-256 `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4`.
-
-Instalação no Glia sem toque na UI (INJECT_EVENTS indisponível no HyperOS):
-1. `adb push` para `/sdcard/Download/Ternary-Bonsai-2-4B-Q2_0.gguf`;
-2. APK debug assinado com a keystore release e `debuggable=true`;
-3. `run-as com.glia.assistant` copiou o arquivo para `files/user-model.gguf`;
-4. APK release com a mesma assinatura substituiu o debug preservando os dados.
-
-O modelo 2B foi removido: não há asset embutido nem seletor 2B nas configurações.
-
-## Mecanismo de teto de memória (V20.4, inspiração em Loci)
-
-O Loci mostra em logs `residency preload/post-load gate: available / margin / reserve /
-budget / decision` e recusa alocações nativas quando excedem o orçamento. O Glia
-implementou mecanismo equivalente, por código próprio:
-
-- `GliaMemory.availableBytes()` lê `MemAvailable` de `/proc/meminfo` (fallback
-  `ActivityManager.availMem`).
-- `budget = MemAvailable - 1,25 GiB (sistema) - 256 MiB (runtime) - tamanho_do_modelo`.
-- O JNI usa `llama_model_n_layer`, `llama_model_n_head_kv` e `llama_model_n_embd`
-  para calcular bytes por token de KV q8_0 e reduz `n_ctx` até caber no budget
-  (intervalo 256–4096).
-- Se nem 256 tokens couberem, `nativeLoadModel` retorna `-4` com mensagem clara.
-- `nativeContextSize()` e `nativeUsesQuantizedKv()` expõem o estado real para o app.
-
-Isso garante que o Bonsai 4B rode abaixo do teto disponível em vez de depender de
-um contexto fixo que poderia estourar a memória em HyperOS.
-
-## Descoberta automática do modelo (V20.5)
-
-O assistente não depende mais apenas do arquivo importado manualmente:
-`ModelStore.discoverModel()` verifica o caminho salvo, `filesDir/user-model.gguf`,
-`filesDir/Ternary-Bonsai-2-4B-Q2_0.gguf`, o Download externo do app e as pastas
-públicas `Download`/`Documents`. O GGUF é validado pelo magic e copiado de forma
-atômica para o armazenamento privado quando corresponde ao 4B Q2_0 esperado.
-Isso permite que o modelo enviado por ADB para `/sdcard/Download` seja encontrado
-e carregado sem toque na UI (o HyperOS bloqueia `INJECT_EVENTS`).
-
-## Validação rigorosa (V20.6)
-
-O modelo 4B e o pipeline de voz passam por 37 testes JVM e 400.015 verificações
-nativas do cálculo de budget (mesmos vetores em Kotlin e C++). O modelo de voz Vosk
-PT-BR foi embutido no APK e é validado por hash/estrutura antes da extração atômica.
-Ver `docs/testes.md` para metodologia, resultados e a limitação do Test Executor Gradle.
-
-## Limitações
-
-- JADX/REA Android e descompiladores nativos indisponíveis: análise de DEX por
-  `dexdump` e strings, sem pseudocódigo Java ou C++.
-- Nenhum benchmark de runtime foi executado; números de TPS/latência são coletados
-  pelo próprio app em device, não estimados neste documento.
-- Mali-G57 segue em backend CPU (decisão documentada).
+- Pacote `llm/`, `GliaMemory`, `MemoryBudget`, `llama.cpp`, `CMakeLists.txt`, testes de
+  GGUF/budget e configurações de inferência foram removidos.
+- O build não usa NDK/CMake próprio; resta apenas o `libvosk.so` das dependências.
+- Comandos são determinísticos (`CommandParser`/`CommandEngine`) e a resposta de voz
+  vem do TTS local. Não há mais GGUF, tool calling JSON, KV cache nem tokens/s.
+- O APK passou de 39.772.730 bytes (V20.6) para 36.757.472 bytes (V21).

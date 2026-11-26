@@ -1,50 +1,46 @@
 package com.glia.assistant.service
 
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.glia.assistant.MainActivity
 import com.glia.assistant.R
 import com.glia.assistant.audio.AudioRecorder
-import com.glia.assistant.core.GliaMemory
+import com.glia.assistant.commands.CognitiveNotesStore
+import com.glia.assistant.commands.CommandEngine
+import com.glia.assistant.commands.CommandParser
+import com.glia.assistant.commands.VoiceCommand
 import com.glia.assistant.core.GliaPrefs
-import com.glia.assistant.llm.LlamaBridge
-import com.glia.assistant.llm.ModelStore
-import com.glia.assistant.llm.TokenCallback
-import com.glia.assistant.llm.ToolCallParser
-import com.glia.assistant.llm.buildPrompt
 import com.glia.assistant.stt.VoskModelStore
 import com.glia.assistant.stt.VoskStt
 import com.glia.assistant.tts.GliaTts
-import com.glia.assistant.tools.BuiltInRouter
-import com.glia.assistant.tools.ContextDeviceController
-import com.glia.assistant.tools.ToolBus
-import com.glia.assistant.tools.ToolCall
 import com.glia.assistant.ui.GliaMode
 import com.glia.assistant.ui.GliaState
-import java.io.File
-import kotlinx.coroutines.CancellationException
+import com.glia.assistant.ui.NotesActivity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -52,40 +48,39 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 class GliaVoiceService : Service() {
-
     companion object {
         private const val TAG = "GliaVoice"
         const val CHANNEL_ID = "glia_voice"
         private const val NOTIF_ID = 1001
+
         const val ACTION_START_LISTENING = "com.glia.assistant.START_LISTENING"
         const val ACTION_STOP = "com.glia.assistant.STOP"
         const val ACTION_TEST_TTS = "com.glia.assistant.TEST_TTS"
-        const val ACTION_TEST_LLM = "com.glia.assistant.TEST_LLM"
-        const val ACTION_RELOAD_MODEL = "com.glia.assistant.RELOAD_MODEL"
 
         @Volatile
         var instance: GliaVoiceService? = null
+            private set
     }
 
     private sealed class AudioMsg {
-        class Chunk(val data: ShortArray, val generation: Int) : AudioMsg()
-        class Flush(val ack: CompletableDeferred<Unit>) : AudioMsg()
+        data class Chunk(val data: ShortArray, val generation: Int) : AudioMsg()
+        data class Flush(val ack: CompletableDeferred<Unit>) : AudioMsg()
     }
 
-    private val serviceJob = SupervisorJob()
-    private val exceptionHandler = CoroutineExceptionHandler { _, e ->
-        Log.e(TAG, "Erro em coroutine", e)
-        GliaState.setLastError(e.message ?: e.toString())
+    private val exceptionHandler = CoroutineExceptionHandler { _, error ->
+        Log.e(TAG, "Erro no servico", error)
+        GliaState.setLastError(error.message ?: "Erro interno")
     }
-    private val scope = CoroutineScope(serviceJob + Dispatchers.Default + exceptionHandler)
+    private val serviceJob = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Default + serviceJob + exceptionHandler)
 
     private lateinit var recorder: AudioRecorder
     private lateinit var stt: VoskStt
     private lateinit var tts: GliaTts
-    private lateinit var llm: LlamaBridge
-    private lateinit var toolBus: ToolBus
+    private lateinit var commandEngine: CommandEngine
+    private lateinit var notes: CognitiveNotesStore
 
-    private val audioQueue = Channel<AudioMsg>(capacity = 128)
+    private val audioQueue = Channel<AudioMsg>(128)
     private var pipelineJob: Job? = null
     private var wakeJob: Job? = null
 
@@ -94,89 +89,49 @@ class GliaVoiceService : Service() {
     @Volatile private var wakeTriggered = false
     @Volatile private var shuttingDown = false
     @Volatile private var recognizerReady = false
-    @Volatile private var modelReady = false
-    @Volatile private var modelLoading = false
-    @Volatile private var modelError: String? = null
     @Volatile private var heardSpeech = false
     @Volatile private var lastSpeechAt = 0L
-
-    private var pipelineGeneration = 0
-    private var wakeGeneration = 0
-    private var modelWakeLock: PowerManager.WakeLock? = null
-    private var genWakeLock: PowerManager.WakeLock? = null
+    @Volatile private var pipelineGeneration = 0
+    @Volatile private var wakeGeneration = 0
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        createNotificationChannel()
         recorder = AudioRecorder()
+        recorder.onAmplitude = { amplitude -> GliaState.setAmplitude(amplitude) }
+        recorder.onBuffer = { data ->
+            if (capturing) audioQueue.trySend(AudioMsg.Chunk(data, captureGeneration))
+        }
+        recorder.onError = { error -> GliaState.setLastError("Audio: $error") }
         stt = VoskStt(this)
         tts = GliaTts(this)
-        llm = LlamaBridge
-        toolBus = ToolBus(ContextDeviceController(this))
-
-        GliaState.setTtsStatus(tts.status())
+        commandEngine = CommandEngine(this)
+        notes = CognitiveNotesStore(this)
         tts.onReady = { GliaState.setTtsStatus(tts.status()) }
-        tts.onTtsError = { msg ->
-            GliaState.setLastError(msg)
-            GliaState.setTtsStatus(tts.status())
-        }
-        recorder.onAmplitude = { GliaState.setAmplitude(it) }
-        recorder.onError = { msg ->
-            GliaState.setLastError(msg)
-            updateNotification("Erro de audio")
-        }
-        recorder.onBuffer = { buf ->
-            val gen = captureGeneration
-            if (capturing) {
-                if (!audioQueue.trySend(AudioMsg.Chunk(buf, gen)).isSuccess) {
-                    Log.w(TAG, "Fila de audio cheia; buffer descartado")
-                }
-            }
-        }
-
-        scope.launch {
-            for (msg in audioQueue) {
-                when (msg) {
-                    is AudioMsg.Chunk -> {
-                        if (msg.generation == captureGeneration) {
-                            try {
-                                processAudio(msg.data)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                Log.e(TAG, "processAudio", e)
-                            }
-                        }
-                    }
-                    is AudioMsg.Flush -> msg.ack.complete(Unit)
-                }
-            }
-        }
-
+        tts.onTtsError = { GliaState.setLastError("Voz: $it") }
+        GliaState.setTtsStatus(tts.status())
+        scope.launch { consumeAudio() }
         scope.launch(Dispatchers.IO) { initVosk() }
-        if (GliaPrefs.isTileActive(this)) startModelLoad() else GliaState.setModelStatus("desligada")
+        if (GliaPrefs.isTileActive(this)) {
+            startWakeWordLoop()
+        } else {
+            GliaState.setAssistantStatus("desligada")
+            GliaState.setMode(GliaMode.IDLE)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIF_ID, buildNotification("Inicializando..."))
+        ensureForeground("Iniciando Glia...")
         when (intent?.action) {
             ACTION_STOP -> {
                 stopEverything()
                 return START_NOT_STICKY
             }
             ACTION_TEST_TTS -> {
-                cancelPipeline()
+                cancelPipeline(stopTts = true)
                 scope.launch { testTts() }
-                return START_STICKY
-            }
-            ACTION_TEST_LLM -> {
-                cancelPipeline()
-                scope.launch { testLlm() }
-                return START_STICKY
-            }
-            ACTION_RELOAD_MODEL -> {
-                cancelPipeline()
-                reloadModel()
                 return START_STICKY
             }
             ACTION_START_LISTENING -> {
@@ -184,7 +139,7 @@ class GliaVoiceService : Service() {
                 return START_STICKY
             }
             else -> {
-                if (pipelineJob?.isActive != true) startWakeWordLoop()
+                startWakeWordLoop()
                 return START_STICKY
             }
         }
@@ -192,86 +147,54 @@ class GliaVoiceService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startModelLoad() {
-        if (modelLoading) return
-        modelLoading = true
-        modelReady = false
-        GliaState.setModelStatus("carregando...")
-        modelWakeLock = acquireLock(modelWakeLock, "Glia:model")
-        scope.launch(Dispatchers.IO) {
-            try {
-                loadModelBlocking()
-            } catch (e: Throwable) {
-                modelError = e.message ?: e.toString()
-                GliaState.setModelStatus("erro: $modelError")
-                Log.e(TAG, "Falha ao carregar modelo", e)
-            } finally {
-                modelLoading = false
-                releaseLock(modelWakeLock)
-                modelWakeLock = null
+    private suspend fun consumeAudio() {
+        for (msg in audioQueue) {
+            when (msg) {
+                is AudioMsg.Chunk -> {
+                    if (msg.generation == captureGeneration) processAudio(msg.data)
+                }
+                is AudioMsg.Flush -> msg.ack.complete(Unit)
             }
         }
     }
 
-    private fun loadModelBlocking() {
-        val resolved = ModelStore.discoverModel(this, GliaPrefs.modelPath(this))
-        val file = resolved.first
-        resolved.second?.let { GliaState.setLastError(it) }
-        if (file == null) {
-            modelError = resolved.second ?: "Modelo .gguf nao encontrado"
-            GliaState.setModelStatus("erro: $modelError")
-            return
+    private fun processAudio(data: ShortArray) {
+        if (!recognizerReady || shuttingDown) return
+        val text = runCatching { stt.feed(data, data.size) }.getOrNull()?.trim().orEmpty()
+        if (text.isEmpty()) return
+        when (GliaState.mode.value) {
+            GliaMode.IDLE -> if (isWakeWord(text)) triggerWake()
+            GliaMode.LISTENING -> {
+                heardSpeech = true
+                lastSpeechAt = SystemClock.elapsedRealtime()
+                GliaState.setPartial(text)
+            }
+            else -> Unit
         }
+    }
 
-        val threads = GliaPrefs.threads(this)
+    private fun isWakeWord(text: String): Boolean {
+        val normalized = CommandParser.normalize(text)
+        if (normalized.contains("ola glia") || normalized.contains("alo glia") ||
+            normalized.contains("hey glia")
+        ) return true
+        return normalized.split(' ').any { token ->
+            token == "glia" || token == "clia" || token.startsWith("glia")
+        }
+    }
 
-        if (!file.isFile || file.length() < 1024) {
-            modelError = "Arquivo de modelo invalido: ${file.name}"
-            GliaState.setModelStatus("erro: $modelError")
-            return
-        }
-        val plan = GliaMemory.plan(this, file.length(), GliaPrefs.contextSize(this))
-        if (!plan.ok) {
-            modelError = plan.message.ifBlank { "Memoria insuficiente para o modelo" }
-            GliaState.setModelStatus("erro: $modelError")
-            return
-        }
-        GliaState.setModelStatus("carregando ${file.name}...")
-        val ok = llm.loadModel(
-            file.absolutePath,
-            plan.contextTokens,
-            threads,
-            plan.budgetBytes
-        )
-        if (ok) {
-            modelReady = true
-            modelError = null
-            GliaPrefs.setModelPath(this, file.absolutePath)
-            val kv = if (llm.usesQuantizedKv()) "KV q8_0" else "KV F16"
-            val realCtx = llm.contextSize()
-            GliaState.setModelStatus(
-                "pronto (${file.name}, ${file.length() / (1024 * 1024)} MB, " +
-                    "ctx $realCtx, $kv, teto ${plan.budgetBytes / (1024 * 1024)} MB)"
-            )
-            Log.i(TAG, "Modelo carregado: ${file.absolutePath} (${plan.message})")
-            return
-        }
-
-        modelReady = false
-        val err = llm.lastError()
-        modelError = err?.ifBlank { "falha ao carregar ${file.name}" } ?: "falha ao carregar ${file.name}"
-        Log.e(TAG, "Falha ao carregar ${file.absolutePath}: $err")
-        GliaState.setModelStatus("erro: $modelError")
+    private suspend fun ensureRecognizer(): Boolean {
+        if (recognizerReady) return true
+        return withContext(Dispatchers.IO) { initVosk() }
     }
 
     private fun initVosk(): Boolean {
         val embedded = VoskModelStore.ensureModel(this)
         val dirs = buildList {
-            if (embedded != null) add(embedded)
+            embedded?.let { add(it) }
             addAll(VoskStt.defaultModelDirs(this@GliaVoiceService))
         }.distinctBy { it.absolutePath }
         for (dir in dirs) {
-            if (!dir.isDirectory) continue
             if (stt.init(dir.absolutePath)) {
                 recognizerReady = true
                 GliaState.setSttStatus("pronto (${dir.name})")
@@ -279,536 +202,306 @@ class GliaVoiceService : Service() {
             }
         }
         recognizerReady = false
-        GliaState.setSttStatus("modelo Vosk indisponivel (asset ausente ou corrompido)")
+        GliaState.setSttStatus("indisponivel")
+        GliaState.setLastError("Modelo Vosk indisponivel (asset ausente ou corrompido)")
         return false
     }
 
     private fun startWakeWordLoop() {
-        if (shuttingDown) return
-        if (pipelineJob?.isActive == true) return
-
-        val gen = ++wakeGeneration
-        val old = wakeJob
-        wakeJob = null
-        old?.cancel()
-
+        if (shuttingDown || pipelineJob?.isActive == true) return
+        wakeGeneration++
+        val generation = wakeGeneration
+        wakeJob?.cancel()
         wakeJob = scope.launch {
+            if (!ensureRecognizer()) {
+                GliaState.setAssistantStatus("erro: modelo de voz ausente")
+                return@launch
+            }
+            stt.finalize()
+            wakeTriggered = false
+            capturing = true
+            captureGeneration++
+            wakeLock = acquireLock(wakeLock, "glia:wake")
             try {
-                if (!recognizerReady) initVosk()
-                if (!recognizerReady) {
-                    GliaState.setMode(GliaMode.IDLE)
-                    GliaState.setLastError(
-                        "Modelo Vosk nao encontrado. Copie vosk-model-small-pt-0.3 para o armazenamento interno."
-                    )
-                    updateNotification("STT indisponivel")
-                    return@launch
-                }
-                try {
-                    stt.finalize()
-                } catch (_: Exception) {
-                }
-                wakeTriggered = false
-                capturing = true
-                captureGeneration++
                 if (!recorder.start()) {
-                    capturing = false
-                    GliaState.setLastError("Falha ao iniciar microfone")
-                    updateNotification("Microfone indisponivel")
+                    GliaState.setLastError("Nao foi possivel abrir o microfone")
                     return@launch
                 }
                 GliaState.setMode(GliaMode.IDLE)
-                updateNotification("Diga \"Glia\"")
-                while (isActive && gen == wakeGeneration && !wakeTriggered) {
+                GliaState.setPartial("")
+                GliaState.setAssistantStatus("aguardando \"Ola Glia\"")
+                updateNotification("Diga \"Ola Glia\"")
+                while (isActive && !shuttingDown && !wakeTriggered && generation == wakeGeneration) {
                     delay(250)
                 }
             } finally {
-                if (gen == wakeGeneration) {
+                if (generation == wakeGeneration) {
                     capturing = false
+                    captureGeneration++
                     recorder.stop()
                 }
+                releaseLock(wakeLock)
+                wakeLock = null
             }
         }
     }
 
-    private suspend fun triggerWake() {
-        if (wakeTriggered) return
+    private fun triggerWake() {
+        if (wakeTriggered || shuttingDown) return
         wakeTriggered = true
         wakeGeneration++
-        val wj = wakeJob
-        wakeJob = null
-        wj?.cancelAndJoin()
-
-        capturing = false
-        captureGeneration++
+        wakeJob?.cancel()
         recorder.stop()
-        try {
-            stt.finalize()
-        } catch (_: Exception) {
+        stt.finalize()
+        scope.launch {
+            delay(120)
+            vibrate()
+            beep()
+            bringToFront()
+            startListening(bypassWake = false)
         }
-        delay(120)
-        vibrate(80)
-        beep()
-        startListening(bypassWake = false)
     }
 
     private fun startListening(bypassWake: Boolean) {
+        if (shuttingDown) return
         if (bypassWake && !GliaPrefs.isTileActive(this)) {
-            GliaState.setMode(GliaMode.IDLE)
+            GliaState.setAssistantStatus("ative o tile Glia para usar a voz")
             return
         }
-        val gen = ++pipelineGeneration
-        if (pipelineJob?.isActive == true) llm.stop()
         wakeTriggered = true
+        wakeGeneration++
+        wakeJob?.cancel()
+        pipelineGeneration++
         pipelineJob?.cancel()
         pipelineJob = scope.launch {
+            if (bypassWake) {
+                flushAudio()
+                recorder.stop()
+            }
+            if (!ensureRecognizer()) return@launch
+            resetForCommand()
             try {
-                if (bypassWake) {
-                    wakeGeneration++
-                    val wj = wakeJob
-                    wakeJob = null
-                    wj?.cancelAndJoin()
-                    capturing = false
-                    captureGeneration++
-                    recorder.stop()
-                    flushAudio()
-                    if (!initVosk()) {
-                        GliaState.setLastError("Modelo Vosk nao encontrado")
-                        return@launch
-                    }
-                }
-                GliaState.resetForCommand()
                 conversationLoop()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Pipeline", e)
-                GliaState.setLastError(e.message ?: e.toString())
             } finally {
-                if (gen == pipelineGeneration && !shuttingDown) {
-                    pipelineJob = null
-                    returnToWake()
-                }
+                if (!shuttingDown) returnToWake()
             }
         }
     }
 
     private suspend fun conversationLoop() {
         var first = true
-        while (currentCoroutineContext().isActive) {
-            val timeout = if (first) 12000L else 7000L
+        while (!shuttingDown && GliaPrefs.isTileActive(this)) {
+            val timeout = if (first) 12_000L else 8_000L
+            val text = captureCommand(timeout, 1_200L) ?: break
             first = false
-            val text = captureCommand(timeout, 1200L) ?: break
-            generateAndSpeak(text)
+            if (!handleText(text)) break
         }
     }
 
+    private suspend fun handleText(text: String): Boolean {
+        val command = CommandParser.parse(text)
+        GliaState.setMode(GliaMode.THINKING)
+        GliaState.setResponse("")
+        if (command is VoiceCommand.StartCognitiveOffload) {
+            handleCognitiveOffload()
+            return false
+        }
+        val result = commandEngine.execute(command)
+        GliaState.setResponse(result.spoken)
+        if (result.openNotes) openNotes()
+        speakAndWait(result.spoken, 30_000L)
+        return true
+    }
+
+    private suspend fun handleCognitiveOffload() {
+        speakAndWait("Claro. Pode falar o que esta na sua mente. Estou ouvindo.", 30_000L)
+        val thought = captureCommand(30_000L, 1_800L)
+        if (thought.isNullOrBlank()) {
+            speakAndWait("Nao consegui ouvir. Quando quiser, diga de novo: quero diminuir a carga cognitiva.", 30_000L)
+            return
+        }
+        notes.add(thought)
+        val confirmation = "Certo, armazenei seus pensamentos. Foi bom pensar com voce."
+        GliaState.setResponse(confirmation)
+        speakAndWait(confirmation, 30_000L)
+        openNotes()
+    }
+
     private suspend fun captureCommand(timeoutMs: Long, silenceMs: Long): String? {
-        if (!recognizerReady && !initVosk()) return null
+        if (!ensureRecognizer()) return null
         GliaState.setMode(GliaMode.LISTENING)
         GliaState.setPartial("")
         heardSpeech = false
         lastSpeechAt = SystemClock.elapsedRealtime()
         captureGeneration++
+        val generation = captureGeneration
         capturing = true
         if (!recorder.start()) {
             capturing = false
-            GliaState.setLastError("Falha ao iniciar microfone")
+            GliaState.setLastError("Nao foi possivel abrir o microfone")
             return null
         }
-
-        val start = SystemClock.elapsedRealtime()
+        val started = SystemClock.elapsedRealtime()
         try {
-            while (currentCoroutineContext().isActive) {
-                val now = SystemClock.elapsedRealtime()
-                if (GliaState.amplitude.value > 0.012f) {
-                    heardSpeech = true
-                    lastSpeechAt = now
-                }
-                if (heardSpeech && now - lastSpeechAt >= silenceMs) break
-                if (now - start >= timeoutMs) break
+            while (SystemClock.elapsedRealtime() - started < timeoutMs) {
                 delay(80)
+                if (heardSpeech && SystemClock.elapsedRealtime() - lastSpeechAt >= silenceMs) break
             }
         } finally {
-            capturing = false
-            captureGeneration++
+            if (generation == captureGeneration) capturing = false
             recorder.stop()
         }
-
         flushAudio()
-        val finalText = try {
-            stt.finalize()
-        } catch (e: Exception) {
-            Log.e(TAG, "finalize", e)
-            ""
+        val finalText = runCatching { stt.finalize() }.getOrDefault("").trim()
+        val partial = GliaState.partialText.value.trim()
+        GliaState.setPartial("")
+        return when {
+            finalText.isNotEmpty() -> finalText
+            partial.isNotEmpty() -> partial
+            else -> null
         }
-        val text = finalText.ifBlank { GliaState.partialText.value }.trim()
-        return text.ifBlank { null }
     }
 
-    private suspend fun flushAudio(timeoutMs: Long = 3000) {
+    private suspend fun flushAudio() {
         val ack = CompletableDeferred<Unit>()
-        withTimeoutOrNull(timeoutMs) {
-            audioQueue.send(AudioMsg.Flush(ack))
-            ack.await()
+        if (audioQueue.trySend(AudioMsg.Flush(ack)).isSuccess) {
+            withTimeoutOrNull(3_000L) { ack.await() }
         }
     }
 
-    private suspend fun processAudio(buf: ShortArray) {
-        if (!recognizerReady) return
-        val text = stt.feed(buf, buf.size) ?: return
-        if (text.isBlank()) return
-        when (GliaState.mode.value) {
-            GliaMode.IDLE -> {
-                if (!wakeTriggered && isWakeWord(text.lowercase())) triggerWake()
-            }
-            GliaMode.LISTENING -> {
-                heardSpeech = true
-                lastSpeechAt = SystemClock.elapsedRealtime()
-                GliaState.setPartial(text)
-            }
-            else -> {
-            }
-        }
-    }
-
-    private fun isWakeWord(text: String): Boolean {
-        val tokens = text.lowercase().split(Regex("[^a-zA-Z0-9\u00C0-\u017F]+")).filter { it.isNotBlank() }
-        return tokens.any { it.startsWith("glia") }
-    }
-
-    private suspend fun generateAndSpeak(userText: String) {
-        GliaState.setMode(GliaMode.THINKING)
-        GliaState.setResponse("")
-        GliaState.setLastError("")
-        updateNotification("Pensando...")
-
-        if (modelLoading) {
-            GliaState.setResponse("Carregando modelo...")
-            while (modelLoading && currentCoroutineContext().isActive) delay(250)
-        }
-        if (!llm.isLoaded()) {
-            val detail = modelError ?: llm.lastError()
-            val msg = if (detail.isNullOrBlank()) {
-                "Modelo de IA nao carregado."
-            } else {
-                "Modelo de IA nao carregado: $detail"
-            }
-            GliaState.setResponse(msg)
-            GliaState.setLastError(msg)
-            updateNotification("Modelo indisponivel")
-            speakAndWait(msg, 20000)
-            return
-        }
-
-        genWakeLock = acquireLock(genWakeLock, "Glia:llm")
-        try {
-            val params = LlamaBridge.GenerationParams(
-                temperature = GliaPrefs.temperature(this),
-                topP = GliaPrefs.topP(this),
-                topK = GliaPrefs.topK(this),
-                minP = GliaPrefs.minP(this),
-                presencePenalty = GliaPrefs.presencePenalty(this),
-                repetitionPenalty = GliaPrefs.repeatPenalty(this),
-                maxTokens = GliaPrefs.maxTokens(this)
-            )
-            val prompt = buildPrompt(userText)
-            val started = SystemClock.elapsedRealtime()
-            var tokens = 0
-            val sentenceBuffer = StringBuilder()
-
-            val callback = object : TokenCallback {
-                override fun onToken(token: String) {
-                    tokens++
-                    GliaState.appendResponse(token)
-                    sentenceBuffer.append(token)
-                    flushSentences(sentenceBuffer, force = false)
-                }
-
-                override fun onDone() {
-                    flushSentences(sentenceBuffer, force = true)
-                }
-
-                override fun onError(message: String) {
-                    GliaState.setLastError(message)
-                    Log.e(TAG, "LLM: $message")
-                }
-            }
-
-            llm.generate(prompt, callback, params)
-            val deadline = SystemClock.elapsedRealtime() + 10 * 60 * 1000L
-            while (llm.isGenerating() &&
-                currentCoroutineContext().isActive &&
-                SystemClock.elapsedRealtime() < deadline
-            ) {
-                delay(100)
-            }
-            if (llm.isGenerating()) {
-                llm.stop()
-                GliaState.setLastError("Geracao excedeu 10 minutos")
-            }
-
-            val elapsed = SystemClock.elapsedRealtime() - started
-            val stats = llm.lastGenerationStats()
-            if (stats.size >= 6) {
-                val tps = stats[4] / 100.0
-                GliaState.setDetailedGenerationStats(
-                    "prefill ${stats[2]}ms · decode ${stats[3]}ms · " +
-                        String.format(java.util.Locale.getDefault(), "%.1f", tps) +
-                        " tok/s · ${stats[1]} tokens (prompt ${stats[0]}, reuse ${stats[5]})"
-                )
-            } else {
-                GliaState.setGenerationStats(elapsed, tokens)
-            }
-            updateNotification("Respondendo...")
-
-            val response = GliaState.responseText.value
-            if (response.isBlank()) {
-                val fallback = "Nao consegui gerar uma resposta."
-                GliaState.setResponse(fallback)
-                GliaState.setLastError(llm.lastError()?.ifBlank { "Resposta vazia do modelo" } ?: "Resposta vazia do modelo")
-                speakAndWait(fallback, 20000)
-            } else {
-                val toolCall = ToolCallParser.parse(response) ?: BuiltInRouter.route(userText)
-                if (toolCall != null) {
-                    executeToolAndSpeak(toolCall)
-                } else {
-                    speakAndWait(null, 180000)
-                }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "generateAndSpeak", e)
-            GliaState.setLastError(e.message ?: e.toString())
-            speakAndWait("Ocorreu um erro ao responder.", 20000)
-        } finally {
-            releaseLock(genWakeLock)
-            genWakeLock = null
-        }
-    }
-
-    private suspend fun executeToolAndSpeak(toolCall: ToolCall) {
-        GliaState.setMode(GliaMode.THINKING)
-        updateNotification("Executando ferramenta...")
-        val result = toolBus.execute(toolCall.name, toolCall.args)
-        if (result == null) {
-            val fallback = "Nao encontrei a ferramenta ${toolCall.name} para executar."
-            GliaState.setResponse(fallback)
-            GliaState.setLastError(fallback)
-            updateNotification("Ferramenta indisponivel")
-            speakAndWait(fallback, 20000)
-            return
-        }
-        GliaState.setResponse(result.spoken)
-        speakAndWait(result.spoken, 20000)
-    }
-
-    private fun flushSentences(buffer: StringBuilder, force: Boolean) {
-        while (true) {
-            val text = buffer.toString()
-            if (text.isEmpty()) return
-            val idx = text.indexOfFirst { it == '.' || it == '!' || it == '?' || it == '\n' }
-            if (idx >= 0 && (idx < text.length - 1 || force)) {
-                val sentence = text.substring(0, idx + 1).trim()
-                buffer.delete(0, idx + 1)
-                if (sentence.isNotBlank()) {
-                    GliaState.setMode(GliaMode.SPEAKING)
-                    tts.speak(sentence)
-                }
-                continue
-            }
-            if (force) {
-                buffer.clear()
-                val rest = text.trim()
-                if (rest.isNotBlank()) {
-                    GliaState.setMode(GliaMode.SPEAKING)
-                    tts.speak(rest)
-                }
-            } else if (text.length >= 160) {
-                val cut = text.lastIndexOf(' ')
-                if (cut > 40) {
-                    val sentence = text.substring(0, cut).trim()
-                    buffer.delete(0, cut + 1)
-                    if (sentence.isNotBlank()) {
-                        GliaState.setMode(GliaMode.SPEAKING)
-                        tts.speak(sentence)
-                    }
-                    continue
-                }
-            }
-            return
-        }
-    }
-
-    private suspend fun speakAndWait(text: String?, timeoutMs: Long) {
-        if (text != null) tts.speak(text)
-        val readyDeadline = SystemClock.elapsedRealtime() + 8000
-        while (!tts.isReady() &&
-            SystemClock.elapsedRealtime() < readyDeadline &&
-            currentCoroutineContext().isActive
-        ) {
-            delay(100)
-        }
-        if (!tts.isReady()) {
-            GliaState.setTtsStatus(tts.status())
-            GliaState.setLastError("TTS nao inicializou; resposta exibida na tela")
-            tts.stop()
-            return
-        }
-
+    private suspend fun speakAndWait(text: String, timeoutMs: Long) {
+        if (text.isBlank() || shuttingDown) return
         GliaState.setMode(GliaMode.SPEAKING)
+        tts.speak(text)
+        val readyDeadline = SystemClock.elapsedRealtime() + 8_000L
+        while (!tts.isReady() && SystemClock.elapsedRealtime() < readyDeadline) delay(50)
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
-        while (tts.isSpeaking() &&
-            currentCoroutineContext().isActive &&
-            SystemClock.elapsedRealtime() < deadline
-        ) {
+        while (tts.isSpeaking() && SystemClock.elapsedRealtime() < deadline && !shuttingDown) {
             delay(100)
         }
-        if (tts.isSpeaking()) {
-            tts.stop()
-            GliaState.setLastError("TTS excedeu o tempo; fala interrompida")
-        }
-        GliaState.setTtsStatus(tts.status())
+        if (tts.isSpeaking()) tts.stop()
     }
 
     private suspend fun testTts() {
-        val msg = "Teste de voz da Glia. Se voce esta ouvindo, a sintese de voz esta funcionando."
-        GliaState.setResponse(msg)
-        tts.speak(msg)
-        speakAndWait(null, 30000)
-        if (!shuttingDown && pipelineJob?.isActive != true) {
-            GliaState.setMode(GliaMode.IDLE)
-            startWakeWordLoop()
-        }
+        speakAndWait(
+            "Ola. Eu sou a Glia. Posso dizer a hora, a data, seus compromissos, " +
+                "ligar a lanterna, abrir aplicativos e guardar seus pensamentos.",
+            30_000L
+        )
+        GliaState.setMode(GliaMode.IDLE)
     }
 
-    private suspend fun testLlm() {
-        generateAndSpeak("Diga apenas: teste do modelo concluido.")
-        if (!shuttingDown && pipelineJob?.isActive != true) {
-            GliaState.setMode(GliaMode.IDLE)
-            startWakeWordLoop()
-        }
-    }
-
-    private fun cancelPipeline() {
-        pipelineGeneration++
-        pipelineJob?.cancel()
-        pipelineJob = null
-        wakeGeneration++
-        val wj = wakeJob
-        wakeJob = null
-        wj?.cancel()
-        llm.stop()
-        capturing = false
-        captureGeneration++
-        scope.launch { recorder.stop() }
-    }
-
-    private fun reloadModel() {
-        if (modelLoading) return
-        updateNotification("Recarregando modelo...")
-        scope.launch {
-            llm.stop()
-            withContext(Dispatchers.IO) { llm.unload() }
-            modelReady = false
-            modelError = null
-            startModelLoad()
-        }
+    private fun resetForCommand() {
+        GliaState.resetForCommand()
+        GliaState.setMode(GliaMode.LISTENING)
+        GliaState.setAssistantStatus("ouvindo")
+        updateNotification("Ouvindo...")
     }
 
     private fun returnToWake() {
-        if (shuttingDown) return
-        capturing = false
-        captureGeneration++
         recorder.stop()
         GliaState.setMode(GliaMode.IDLE)
         GliaState.setPartial("")
-        startWakeWordLoop()
+        if (!shuttingDown && GliaPrefs.isTileActive(this)) startWakeWordLoop()
     }
 
-    private fun stopEverything() {
-        shuttingDown = true
+    private fun cancelPipeline(stopTts: Boolean) {
         pipelineGeneration++
         wakeGeneration++
         pipelineJob?.cancel()
         pipelineJob = null
         wakeJob?.cancel()
         wakeJob = null
-        capturing = false
-        captureGeneration++
-        scope.launch {
-            llm.stop()
-            tts.stop()
-            recorder.stop()
-            GliaState.setMode(GliaMode.IDLE)
-            GliaState.setPartial("")
-            GliaState.setResponse("")
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-        }
+        recorder.stop()
+        if (stopTts) tts.stop()
+        GliaState.setMode(GliaMode.IDLE)
+        GliaState.setPartial("")
     }
 
-    private fun acquireLock(existing: PowerManager.WakeLock?, tag: String): PowerManager.WakeLock? {
-        if (existing?.isHeld == true) return existing
-        val pm = getSystemService(PowerManager::class.java) ?: return existing
-        return pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag).apply {
-            setReferenceCounted(false)
-            acquire(15 * 60 * 1000L)
-        }
+    private fun stopEverything() {
+        shuttingDown = true
+        cancelPipeline(stopTts = true)
+        releaseLock(wakeLock)
+        wakeLock = null
+        GliaState.setMode(GliaMode.IDLE)
+        GliaState.setPartial("")
+        GliaState.setResponse("")
+        GliaState.setAssistantStatus("desligada")
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
-    private fun releaseLock(lock: PowerManager.WakeLock?) {
+    private fun openNotes() {
         try {
-            if (lock?.isHeld == true) lock.release()
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun vibrate(ms: Long) {
-        try {
-            val v = getSystemService(Vibrator::class.java) ?: return
-            if (!v.hasVibrator()) return
-            v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun beep() {
-        try {
-            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 60)
-            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
-            scope.launch {
-                delay(250)
-                try {
-                    tone.release()
-                } catch (_: Exception) {
-                }
-            }
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun updateNotification(text: String) {
-        try {
-            val nm = getSystemService(NotificationManager::class.java) ?: return
-            nm.notify(NOTIF_ID, buildNotification(text))
+            startActivity(
+                Intent(this, NotesActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            )
         } catch (e: Exception) {
-            Log.w(TAG, "notify: ${e.message}")
+            Log.w(TAG, "Nao foi possivel abrir as notas", e)
         }
+    }
+
+    private fun bringToFront() {
+        try {
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    )
+                    putExtra(MainActivity.EXTRA_WAKE, true)
+                }
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Nao foi possivel trazer a Glia para frente", e)
+        }
+    }
+
+    private fun ensureForeground(text: String) {
+        val notification = buildNotification(text)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIF_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
+        } else {
+            startForeground(NOTIF_ID, notification)
+        }
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = getSystemService(NotificationManager::class.java)
+        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Glia",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Escuta e comandos da Glia"
+            setShowBadge(false)
+        }
+        manager.createNotificationChannel(channel)
     }
 
     private fun buildNotification(text: String): Notification {
         val openIntent = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            Intent(this, MainActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            ),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val stopIntent = PendingIntent.getService(
             this,
             1,
             Intent(this, GliaVoiceService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Glia")
@@ -824,32 +517,74 @@ class GliaVoiceService : Service() {
             .build()
     }
 
+    private fun updateNotification(text: String) {
+        try {
+            getSystemService(NotificationManager::class.java)
+                .notify(NOTIF_ID, buildNotification(text))
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao atualizar notificacao", e)
+        }
+    }
+
+    private fun acquireLock(existing: PowerManager.WakeLock?, tag: String): PowerManager.WakeLock? {
+        return try {
+            val manager = getSystemService(PowerManager::class.java)
+            val lock = existing ?: manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag).apply {
+                setReferenceCounted(false)
+            }
+            lock.acquire(15 * 60 * 1000L)
+            lock
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao adquirir wake lock", e)
+            null
+        }
+    }
+
+    private fun releaseLock(lock: PowerManager.WakeLock?) {
+        try {
+            if (lock?.isHeld == true) lock.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao liberar wake lock", e)
+        }
+    }
+
+    private fun vibrate() {
+        try {
+            val effect = VibrationEffect.createOneShot(60L, VibrationEffect.DEFAULT_AMPLITUDE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                getSystemService(VibratorManager::class.java)?.defaultVibrator?.vibrate(effect)
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Vibrator::class.java)?.vibrate(effect)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao vibrar", e)
+        }
+    }
+
+    private fun beep() {
+        try {
+            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 70)
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
+            scope.launch {
+                delay(250)
+                tone.release()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao tocar beep", e)
+        }
+    }
+
     override fun onDestroy() {
         shuttingDown = true
-        wakeGeneration++
-        pipelineGeneration++
-        scope.cancel()
-        try {
-            recorder.stop()
-        } catch (_: Exception) {
-        }
-        try {
-            stt.release()
-        } catch (_: Exception) {
-        }
-        try {
-            tts.shutdown()
-        } catch (_: Exception) {
-        }
-        try {
-            llm.stop()
-            llm.unload()
-        } catch (_: Exception) {
-        }
-        releaseLock(modelWakeLock)
-        releaseLock(genWakeLock)
-        modelWakeLock = null
-        genWakeLock = null
+        releaseLock(wakeLock)
+        wakeLock = null
+        pipelineJob?.cancel()
+        wakeJob?.cancel()
+        serviceJob.cancel()
+        runCatching { recorder.stop() }
+        runCatching { stt.release() }
+        runCatching { tts.shutdown() }
         instance = null
         super.onDestroy()
     }

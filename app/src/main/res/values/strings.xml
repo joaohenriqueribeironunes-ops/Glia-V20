@@ -1,15 +1,11 @@
 <resources>
     <string name="app_name">Glia</string>
     <string name="tile_label">Glia</string>
-    <string name="wake_word">Ei Glia</string>
+    <string name="wake_word">Olá Glia</string>
     <string name="listening">Ouvindo…</string>
-    <string name="thinking">Pensando…</string>
+    <string name="thinking">Preparando…</string>
     <string name="speaking">Falando…</string>
-    <string name="idle">Dormindo</string>
-    <string name="import_model">Importar modelo .gguf</string>
-    <string name="model_path">Caminho do modelo</string>
-    <string name="temperature">Temperatura</string>
-    <string name="context_size">Tamanho do contexto</string>
+    <string name="idle">Glia desligada</string>
     <string name="permission_mic">Permissão de microfone</string>
     <string name="permission_overlay">Sobreposição de tela</string>
     <string name="battery_opt">Ignorar otimização de bateria</string>

@@ -9,27 +9,16 @@ plugins {
 android {
     namespace = "com.glia.assistant"
     compileSdk = 35
-    ndkVersion = "28.2.13676358"
-
-    aaptOptions {
-        noCompress += "gguf"
-    }
 
     defaultConfig {
         applicationId = "com.glia.assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "2.0.0"
+        versionCode = 21
+        versionName = "2.1.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
-        }
-        externalNativeBuild {
-            cmake {
-                cppFlags += listOf("-std=c++17", "-O3")
-                arguments += listOf("-DANDROID_STL=c++_shared")
-            }
         }
     }
 
@@ -59,13 +48,6 @@ android {
             isMinifyEnabled = false
             isDebuggable = true
             signingConfig = signingConfigs.getByName("release")
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.31.6"
         }
     }
 

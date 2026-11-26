@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-# Full offline test suite for Glia V20.6.
+# Full offline test suite for Glia V21 (deterministic commands, no LLM).
 # JVM tests are launched directly via JUnitCore with an explicit classpath:
 # the Gradle Test Executor in this environment cannot see compiled test classes.
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -35,9 +35,11 @@ $entries = @(
 $cp = ($entries -join ';')
 
 $classes = @(
-    'com.glia.assistant.core.MemoryBudgetVectorTest',
-    'com.glia.assistant.llm.GgufHeaderTest',
-    'com.glia.assistant.llm.ModelDiscoveryTest',
+    'com.glia.assistant.commands.CommandParserTest',
+    'com.glia.assistant.commands.CalendarSummaryTest',
+    'com.glia.assistant.commands.CognitiveNotesStoreTest',
+    'com.glia.assistant.commands.AppMatcherTest',
+    'com.glia.assistant.commands.VoiceRankingTest',
     'com.glia.assistant.stt.VoskAssetTest',
     'com.glia.assistant.stt.VoskExtractionTest'
 )
@@ -45,9 +47,5 @@ $classes = @(
 Write-Host '== Running JVM tests (JUnitCore) =='
 & $java '-Dfile.encoding=UTF-8' -cp $cp org.junit.runner.JUnitCore $classes
 if ($LASTEXITCODE -ne 0) { throw "JVM tests failed: $LASTEXITCODE" }
-
-Write-Host '== Running native memory budget test =='
-& (Join-Path $root 'scripts\test_memory_budget.ps1')
-if ($LASTEXITCODE -ne 0) { throw "native tests failed: $LASTEXITCODE" }
 
 Write-Host 'ALL_TESTS_OK'

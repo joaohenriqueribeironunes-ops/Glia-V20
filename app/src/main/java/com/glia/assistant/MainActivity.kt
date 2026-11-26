@@ -1,10 +1,12 @@
 package com.glia.assistant
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,8 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.glia.assistant.commands.CognitiveNotesStore
 import com.glia.assistant.core.GliaPrefs
 import com.glia.assistant.service.GliaVoiceService
 import com.glia.assistant.ui.GliaAccent
@@ -58,11 +59,15 @@ import com.glia.assistant.ui.GliaTheme
 import com.glia.assistant.ui.GlassCard
 import com.glia.assistant.ui.HyperIsland
 import com.glia.assistant.ui.HyperTile
+import com.glia.assistant.ui.NotesActivity
 import com.glia.assistant.ui.SettingsActivity
 import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
-    companion object { private const val EXTRA_ACTION = "glia_action" }
+    companion object {
+        private const val EXTRA_ACTION = "glia_action"
+        const val EXTRA_WAKE = "glia_wake"
+    }
 
     private val tileActive = MutableStateFlow(false)
 
@@ -74,7 +79,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        showOnLockScreen()
         setContent { GliaTheme { MainScreen(this, tileActive.collectAsState().value) } }
+        if (intent?.getBooleanExtra(EXTRA_WAKE, false) == true) dismissKeyguard()
         val action = intent?.getStringExtra(EXTRA_ACTION)
         if (action != null) {
             startGlia(normalizeAction(action))
@@ -91,16 +98,34 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_WAKE, false)) dismissKeyguard()
         val action = intent.getStringExtra(EXTRA_ACTION)
         if (action != null) startGlia(normalizeAction(action))
+    }
+
+    private fun showOnLockScreen() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    private fun dismissKeyguard() {
+        val km = getSystemService(KeyguardManager::class.java)
+        km?.requestDismissKeyguard(this, null)
     }
 
     private fun normalizeAction(raw: String): String = when (raw) {
         "START_LISTENING" -> GliaVoiceService.ACTION_START_LISTENING
         "STOP" -> GliaVoiceService.ACTION_STOP
         "TEST_TTS" -> GliaVoiceService.ACTION_TEST_TTS
-        "TEST_LLM" -> GliaVoiceService.ACTION_TEST_LLM
-        "RELOAD_MODEL" -> GliaVoiceService.ACTION_RELOAD_MODEL
         else -> raw
     }
 
@@ -115,19 +140,20 @@ class MainActivity : ComponentActivity() {
         GliaPrefs.setTileActive(this, active)
         tileActive.value = active
         if (active) {
-            startGlia(GliaVoiceService.ACTION_START_LISTENING)
+            startGlia()
         } else {
             startGlia(GliaVoiceService.ACTION_STOP)
         }
     }
 
+    fun openNotes() {
+        startActivity(Intent(this, NotesActivity::class.java))
+    }
+
     private fun requestPerms() {
-        val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        val perms = mutableListOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_CALENDAR)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
         val missing = perms.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
@@ -142,11 +168,11 @@ fun MainScreen(activity: MainActivity, tileActive: Boolean) {
     val amp by GliaState.amplitude.collectAsState()
     val partial by GliaState.partialText.collectAsState()
     val response by GliaState.responseText.collectAsState()
-    val modelStatus by GliaState.modelStatus.collectAsState()
+    val assistantStatus by GliaState.assistantStatus.collectAsState()
     val ttsStatus by GliaState.ttsStatus.collectAsState()
     val sttStatus by GliaState.sttStatus.collectAsState()
     val lastError by GliaState.lastError.collectAsState()
-    val generationStats by GliaState.generationStats.collectAsState()
+    val noteCount = CognitiveNotesStore(activity).count()
 
     val infinite = rememberInfiniteTransition(label = "orb")
     val pulse by infinite.animateFloat(
@@ -223,9 +249,9 @@ fun MainScreen(activity: MainActivity, tileActive: Boolean) {
 
         Text(
             text = when (mode) {
-                GliaMode.IDLE -> if (tileActive) "Diga \"Glia\"" else "Ative o tile para ouvir"
+                GliaMode.IDLE -> if (tileActive) "Diga \"Olá Glia\"" else "Ative o tile para ouvir"
                 GliaMode.LISTENING -> "Ouvindo..."
-                GliaMode.THINKING -> "Pensando..."
+                GliaMode.THINKING -> "Preparando..."
                 GliaMode.SPEAKING -> "Falando..."
             },
             style = MaterialTheme.typography.titleMedium,
@@ -250,7 +276,7 @@ fun MainScreen(activity: MainActivity, tileActive: Boolean) {
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                StatusCard(modelStatus, ttsStatus, sttStatus, lastError, generationStats)
+                StatusCard(assistantStatus, ttsStatus, sttStatus, lastError.orEmpty())
                 if (response.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -272,13 +298,13 @@ fun MainScreen(activity: MainActivity, tileActive: Boolean) {
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(10.dp))
-        ControlGrid(activity = activity, tileActive = tileActive)
+        ControlGrid(activity = activity, tileActive = tileActive, noteCount = noteCount)
         Spacer(Modifier.height(20.dp))
     }
 }
 
 @Composable
-private fun ControlGrid(activity: MainActivity, tileActive: Boolean) {
+private fun ControlGrid(activity: MainActivity, tileActive: Boolean, noteCount: Int) {
     val entries = listOf(
         ControlEntry("mic", "Escuta", if (tileActive) "ligada" else "desligada", tileActive, GliaAccent.Purple) {
             activity.toggleTile()
@@ -286,16 +312,13 @@ private fun ControlGrid(activity: MainActivity, tileActive: Boolean) {
         ControlEntry("chat", "Falar agora", "sem palavra-chave", false, GliaAccent.Teal) {
             activity.startGlia(GliaVoiceService.ACTION_START_LISTENING)
         },
-        ControlEntry("brain", "Testar modelo", "resposta curta", false, GliaAccent.Lavender) {
-            activity.startGlia(GliaVoiceService.ACTION_TEST_LLM)
-        },
         ControlEntry("spark", "Testar voz", "TTS PT-BR", false, GliaAccent.Coral) {
             activity.startGlia(GliaVoiceService.ACTION_TEST_TTS)
         },
-        ControlEntry("reload", "Recarregar", "modelo local", false, GliaAccent.Purple) {
-            activity.startGlia(GliaVoiceService.ACTION_RELOAD_MODEL)
+        ControlEntry("brain", "Pensamentos", "$noteCount guardados", false, GliaAccent.Lavender) {
+            activity.openNotes()
         },
-        ControlEntry("stop", "Parar", "libera mic", false, GliaAccent.Coral) {
+        ControlEntry("stop", "Parar", "libera microfone", false, GliaAccent.Coral) {
             activity.startGlia(GliaVoiceService.ACTION_STOP)
         }
     )
@@ -333,7 +356,7 @@ private fun ControlGrid(activity: MainActivity, tileActive: Boolean) {
                 )
             },
             label = "Configurações",
-            caption = "modelo, voz, permissões",
+            caption = "voz, permissões, comandos",
             active = false,
             accent = GliaAccent.Purple,
             onClick = { activity.startActivity(Intent(activity, SettingsActivity::class.java)) },
@@ -353,16 +376,14 @@ private data class ControlEntry(
 
 @Composable
 fun StatusCard(
-    modelStatus: String,
+    assistantStatus: String,
     ttsStatus: String,
     sttStatus: String,
-    lastError: String,
-    generationStats: String
+    lastError: String
 ) {
-    StatusLine("Modelo", modelStatus, GliaAccent.Purple)
+    StatusLine("Assistente", assistantStatus, GliaAccent.Purple)
     StatusLine("Voz", ttsStatus, GliaAccent.Teal)
     StatusLine("Microfone", sttStatus, GliaAccent.Lavender)
-    if (generationStats.isNotBlank()) StatusLine("Geração", generationStats, GliaAccent.Purple)
     if (lastError.isNotBlank()) {
         Text(
             "Erro: $lastError",
