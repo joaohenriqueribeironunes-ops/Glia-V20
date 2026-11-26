@@ -17,11 +17,19 @@ import androidx.core.app.NotificationCompat
 import com.glia.assistant.MainActivity
 import com.glia.assistant.R
 import com.glia.assistant.audio.AudioRecorder
+import com.glia.assistant.core.GliaMemory
+import com.glia.assistant.core.GliaPrefs
 import com.glia.assistant.llm.LlamaBridge
 import com.glia.assistant.llm.ModelStore
 import com.glia.assistant.llm.TokenCallback
+import com.glia.assistant.llm.ToolCallParser
+import com.glia.assistant.llm.buildPrompt
 import com.glia.assistant.stt.VoskStt
 import com.glia.assistant.tts.GliaTts
+import com.glia.assistant.tools.BuiltInRouter
+import com.glia.assistant.tools.ContextDeviceController
+import com.glia.assistant.tools.ToolBus
+import com.glia.assistant.tools.ToolCall
 import com.glia.assistant.ui.GliaMode
 import com.glia.assistant.ui.GliaState
 import java.io.File
@@ -74,6 +82,7 @@ class GliaVoiceService : Service() {
     private lateinit var stt: VoskStt
     private lateinit var tts: GliaTts
     private lateinit var llm: LlamaBridge
+    private lateinit var toolBus: ToolBus
 
     private val audioQueue = Channel<AudioMsg>(capacity = 128)
     private var pipelineJob: Job? = null
@@ -102,6 +111,7 @@ class GliaVoiceService : Service() {
         stt = VoskStt(this)
         tts = GliaTts(this)
         llm = LlamaBridge()
+        toolBus = ToolBus(ContextDeviceController(this))
 
         GliaState.setTtsStatus(tts.status())
         tts.onReady = { GliaState.setTtsStatus(tts.status()) }
@@ -143,7 +153,7 @@ class GliaVoiceService : Service() {
         }
 
         scope.launch(Dispatchers.IO) { initVosk() }
-        startModelLoad()
+        if (GliaPrefs.isTileActive(this)) startModelLoad() else GliaState.setModelStatus("desligada")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -203,10 +213,9 @@ class GliaVoiceService : Service() {
     }
 
     private fun loadModelBlocking() {
-        val prefs = getSharedPreferences("glia", MODE_PRIVATE)
+        val userPath = GliaPrefs.modelPath(this)
+        val userFile = userPath?.let { File(it) } ?: ModelStore.userModelFile(this)
         val embedded = ModelStore.ensureModel(this)
-        val userPath = prefs.getString("model_path", null)
-        val userFile = userPath?.let { File(it) }
         val candidates = listOfNotNull(userFile, embedded).distinctBy { it.absolutePath }
         if (candidates.isEmpty()) {
             modelError = "Modelo .gguf nao encontrado"
@@ -214,17 +223,23 @@ class GliaVoiceService : Service() {
             return
         }
 
-        val ctx = prefs.getInt("context_size", 512).coerceIn(512, 8192)
-        val threads = prefs.getInt("threads", 8).coerceIn(1, 8)
+        val ctx = GliaPrefs.contextSize(this)
+        val threads = GliaPrefs.threads(this)
 
         for (file in candidates) {
             if (!file.isFile || file.length() < 1024) continue
+            val memCheck = GliaMemory.check(this, file.length())
+            if (!memCheck.first) {
+                modelError = memCheck.second.ifBlank { "Memoria insuficiente para o modelo" }
+                GliaState.setModelStatus("erro: $modelError")
+                return
+            }
             GliaState.setModelStatus("carregando ${file.name}...")
             val ok = llm.loadModel(file.absolutePath, ctx, threads)
             if (ok) {
                 modelReady = true
                 modelError = null
-                prefs.edit().putString("model_path", file.absolutePath).apply()
+                GliaPrefs.setModelPath(this, file.absolutePath)
                 GliaState.setModelStatus("pronto (${file.name}, ${file.length() / (1024 * 1024)} MB)")
                 Log.i(TAG, "Modelo carregado: ${file.absolutePath}")
                 return
@@ -287,7 +302,7 @@ class GliaVoiceService : Service() {
                     return@launch
                 }
                 GliaState.setMode(GliaMode.IDLE)
-                updateNotification("Diga \"Ei Glia\"")
+                updateNotification("Diga \"Glia\"")
                 while (isActive && gen == wakeGeneration && !wakeTriggered) {
                     delay(250)
                 }
@@ -322,6 +337,10 @@ class GliaVoiceService : Service() {
     }
 
     private fun startListening(bypassWake: Boolean) {
+        if (bypassWake && !GliaPrefs.isTileActive(this)) {
+            GliaState.setMode(GliaMode.IDLE)
+            return
+        }
         val gen = ++pipelineGeneration
         if (pipelineJob?.isActive == true) llm.stop()
         wakeTriggered = true
@@ -438,11 +457,8 @@ class GliaVoiceService : Service() {
     }
 
     private fun isWakeWord(text: String): Boolean {
-        return text.contains("ei glia") ||
-            text.contains("ei, glia") ||
-            text.contains("e glia") ||
-            text.contains("hey glia") ||
-            text.contains("oi glia")
+        val tokens = text.lowercase().split(Regex("[^a-zA-Z0-9\u00C0-\u017F]+")).filter { it.isNotBlank() }
+        return tokens.any { it.startsWith("glia") }
     }
 
     private suspend fun generateAndSpeak(userText: String) {
@@ -471,12 +487,15 @@ class GliaVoiceService : Service() {
 
         genWakeLock = acquireLock(genWakeLock, "Glia:llm")
         try {
-            val prefs = getSharedPreferences("glia", MODE_PRIVATE)
-            val temperature = try {
-                prefs.getFloat("temperature", 0.7f)
-            } catch (_: Exception) {
-                0.7f
-            }
+            val params = LlamaBridge.GenerationParams(
+                temperature = GliaPrefs.temperature(this),
+                topP = GliaPrefs.topP(this),
+                topK = GliaPrefs.topK(this),
+                minP = GliaPrefs.minP(this),
+                presencePenalty = GliaPrefs.presencePenalty(this),
+                repetitionPenalty = GliaPrefs.repeatPenalty(this),
+                maxTokens = GliaPrefs.maxTokens(this)
+            )
             val prompt = buildPrompt(userText)
             val started = SystemClock.elapsedRealtime()
             var tokens = 0
@@ -500,7 +519,7 @@ class GliaVoiceService : Service() {
                 }
             }
 
-            llm.generate(prompt, callback, temperature)
+            llm.generate(prompt, callback, params)
             val deadline = SystemClock.elapsedRealtime() + 10 * 60 * 1000L
             while (llm.isGenerating() &&
                 currentCoroutineContext().isActive &&
@@ -524,7 +543,12 @@ class GliaVoiceService : Service() {
                 GliaState.setLastError(llm.lastError().ifBlank { "Resposta vazia do modelo" })
                 speakAndWait(fallback, 20000)
             } else {
-                speakAndWait(null, 180000)
+                val toolCall = ToolCallParser.parse(response) ?: BuiltInRouter.route(userText)
+                if (toolCall != null) {
+                    executeToolAndSpeak(toolCall)
+                } else {
+                    speakAndWait(null, 180000)
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -538,12 +562,20 @@ class GliaVoiceService : Service() {
         }
     }
 
-    private fun buildPrompt(userText: String): String {
-        val safe = userText.replace("<|", "< |").replace("|>", "| >").trim()
-        val system = "Voce e a Glia, assistente pessoal offline em portugues. Responda de forma curta e natural."
-        return "<|im_start|>system\n$system<|im_end|>\n" +
-            "<|im_start|>user\n$safe<|im_end|>\n" +
-            "<|im_start|>assistant\n thinking\n\n</think>\n\n"
+    private suspend fun executeToolAndSpeak(toolCall: ToolCall) {
+        GliaState.setMode(GliaMode.THINKING)
+        updateNotification("Executando ferramenta...")
+        val result = toolBus.execute(toolCall.name, toolCall.args)
+        if (result == null) {
+            val fallback = "Nao encontrei a ferramenta ${toolCall.name} para executar."
+            GliaState.setResponse(fallback)
+            GliaState.setLastError(fallback)
+            updateNotification("Ferramenta indisponivel")
+            speakAndWait(fallback, 20000)
+            return
+        }
+        GliaState.setResponse(result.spoken)
+        speakAndWait(result.spoken, 20000)
     }
 
     private fun flushSentences(buffer: StringBuilder, force: Boolean) {

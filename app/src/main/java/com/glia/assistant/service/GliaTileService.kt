@@ -3,6 +3,7 @@ package com.glia.assistant.service
 import android.content.Intent
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import com.glia.assistant.core.GliaPrefs
 import com.glia.assistant.ui.QuickOverlayActivity
 
 class GliaTileService : TileService() {
@@ -20,7 +21,7 @@ class GliaTileService : TileService() {
             setActive(false)
             updateTileState(false)
         } else {
-            // Ativa escuta imediata (bypass wake word)
+            // Ativa escuta imediata (bypass wake word) - apenas com tile ligado
             setActive(true)
             updateTileState(true)
             // Inicia foreground service
@@ -36,13 +37,9 @@ class GliaTileService : TileService() {
         }
     }
 
-    private fun isActive(): Boolean {
-        return getSharedPreferences("glia", MODE_PRIVATE).getBoolean("tile_active", false)
-    }
+    private fun isActive(): Boolean = GliaPrefs.isTileActive(this)
 
-    private fun setActive(v: Boolean) {
-        getSharedPreferences("glia", MODE_PRIVATE).edit().putBoolean("tile_active", v).apply()
-    }
+    private fun setActive(v: Boolean) = GliaPrefs.setTileActive(this, v)
 
     private fun updateTileState(active: Boolean) {
         qsTile?.apply {

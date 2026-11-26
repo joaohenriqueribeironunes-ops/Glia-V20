@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -17,8 +19,8 @@ android {
         applicationId = "com.glia.assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.4"
+        versionCode = 20
+        versionName = "2.0.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -31,10 +33,27 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val releaseKeystorePropertiesFile = rootProject.file("release.keystore.properties")
+            val releaseKeystoreProperties = Properties().apply {
+                if (releaseKeystorePropertiesFile.exists()) {
+                    releaseKeystorePropertiesFile.inputStream().use { load(it) }
+                }
+            }
+            val storeFilePath = releaseKeystoreProperties.getProperty("storeFile") ?: "release.keystore"
+            storeFile = rootProject.file(storeFilePath)
+            storePassword = releaseKeystoreProperties.getProperty("storePassword") ?: ""
+            keyAlias = releaseKeystoreProperties.getProperty("keyAlias") ?: "glia"
+            keyPassword = releaseKeystoreProperties.getProperty("keyPassword") ?: releaseKeystoreProperties.getProperty("storePassword") ?: ""
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             isMinifyEnabled = false

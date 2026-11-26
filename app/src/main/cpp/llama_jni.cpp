@@ -243,24 +243,26 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeIsLoaded(JNIEnv* env, jobject thiz
     return g_loaded.load() ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jboolean JNICALL
 Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz,
                                                       jstring prompt, jobject callback,
-                                                      jfloat temperature) {
+                                                      jfloat temperature, jfloat topP, jint topK,
+                                                      jfloat minP, jfloat presencePenalty,
+                                                      jfloat repetitionPenalty, jint maxTokens) {
     std::unique_lock<std::mutex> lock(g_mutex);
     if (!g_loaded.load() || !g_ctx || !g_model || !g_vocab) {
         set_error("Modelo nao carregado");
-        return;
+        return JNI_FALSE;
     }
     if (!prompt || !callback) {
         set_error("Prompt ou callback nulo");
-        return;
+        return JNI_FALSE;
     }
 
     const char* p = env->GetStringUTFChars(prompt, nullptr);
     if (!p) {
         set_error("Falha ao ler prompt");
-        return;
+        return JNI_FALSE;
     }
     jsize pLen = env->GetStringUTFLength(prompt);
     std::string promptStr(p, (size_t) pLen);
@@ -275,7 +277,7 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz
     jobject cbGlobal = env->NewGlobalRef(callback);
     if (!cbGlobal) {
         set_error("Falha ao criar referencia do callback");
-        return;
+        return JNI_FALSE;
     }
     jclass cbClass = env->GetObjectClass(cbGlobal);
     jmethodID onToken = env->GetMethodID(cbClass, "onToken", "(Ljava/lang/String;)V");
@@ -287,19 +289,19 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz
     if (!onToken || !onDone) {
         env->DeleteGlobalRef(cbGlobal);
         set_error("Callback TokenCallback invalido");
-        return;
+        return JNI_FALSE;
     }
 
     std::vector<llama_token> tokens = tokenize(promptStr);
     if (tokens.empty()) {
         env->DeleteGlobalRef(cbGlobal);
         set_error("Tokenizacao do prompt retornou vazio");
-        return;
+        return JNI_FALSE;
     }
     if ((int) tokens.size() >= (int) llama_n_ctx(g_ctx)) {
         env->DeleteGlobalRef(cbGlobal);
         set_error("Prompt maior que o contexto do modelo");
-        return;
+        return JNI_FALSE;
     }
 
     llama_memory_clear(llama_get_memory(g_ctx), true);
@@ -307,23 +309,23 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz
     if (llama_decode(g_ctx, batch) != 0) {
         env->DeleteGlobalRef(cbGlobal);
         set_error("Falha no decode do prompt");
-        return;
+        return JNI_FALSE;
     }
 
     llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
     llama_sampler* sampler = llama_sampler_chain_init(sparams);
     llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
-        llama_vocab_n_tokens(g_vocab), 64, 1.1f, 0.0f, 0.0f));
-    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(20));
-    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.8f, 1));
-    llama_sampler_chain_add(sampler, llama_sampler_init_min_p(0.0f, 1));
+        llama_vocab_n_tokens(g_vocab), 64, repetitionPenalty, 0.0f, presencePenalty));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1.0f));
+    llama_sampler_chain_add(sampler, llama_sampler_init_min_p(minP, 1.0f));
     llama_sampler_chain_add(sampler, llama_sampler_init_temp(
         temperature > 0.0f ? temperature : 0.7f));
     llama_sampler_chain_add(sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     std::string error;
     int tokenCount = 0;
-    const int max_new = 512;
+    const int max_new = maxTokens > 0 ? maxTokens : 256;
     LOGI("generate: start prompt_len=%zu max_new=%d", promptStr.size(), max_new);
     for (int i = 0; i < max_new; i++) {
         if (g_stop.load()) break;
@@ -391,6 +393,8 @@ Java_com_glia_assistant_llm_LlamaBridge_nativeGenerate(JNIEnv* env, jobject thiz
     env->DeleteGlobalRef(cbGlobal);
     if (!error.empty()) set_error(error.c_str());
     LOGI("generate done, tokens=%d", tokenCount);
+
+    return JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL

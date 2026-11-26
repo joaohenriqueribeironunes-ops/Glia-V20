@@ -18,3 +18,8 @@ local.properties
 .idea/
 .kotlin/
 *.log
+
+# Keystore release (local, NAO subir)
+*.keystore
+*.jks
+release.keystore.properties
