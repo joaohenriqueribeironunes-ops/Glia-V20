@@ -15,14 +15,22 @@ class MicGainTest {
     }
 
     @Test
-    fun `amplificacao aumenta fala fraca sem estourar PCM`() {
+    fun `ganho e linear na faixa normal da fala`() {
+        assertEquals(0.5f, MicGain.limit(0.5f), 0.00001f)
         val original = 1000.toShort()
         val amplified = MicGain.amplify(original, 2f)
-        assertTrue(amplified > original)
+        assertTrue(abs(amplified.toInt() - 2000) <= 2)
+    }
+
+    @Test
+    fun `limitador suave evita clipping duro nos picos`() {
+        val limited = MicGain.limit(2f)
+        assertTrue(limited < 1f)
+        assertTrue(limited > MicGain.LIMITER_KNEE)
 
         val loud = MicGain.amplify(32000.toShort(), 4f)
         assertTrue(loud.toInt() in -32768..32767)
-        assertTrue(abs(loud.toInt()) <= 32767)
+        assertTrue(abs(loud.toInt()) > 30000)
     }
 
     @Test

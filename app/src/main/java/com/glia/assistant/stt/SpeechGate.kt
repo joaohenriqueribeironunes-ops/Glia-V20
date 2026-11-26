@@ -18,7 +18,8 @@ class SpeechGate(
         val aboveFrames: Int = 0,
         val speaking: Boolean = false,
         val speechFrames: Int = 0,
-        val silenceFrames: Int = 0
+        val silenceFrames: Int = 0,
+        val calibrationFrames: Int = 0
     )
 
     enum class Decision { WAIT, START, KEEP, END, MAX }
@@ -32,6 +33,8 @@ class SpeechGate(
         const val MAX_START_RMS = 0.05f
         const val MIN_END_RMS = 0.0012f
         const val END_MULTIPLIER = 1.6f
+        /** 100 ms medindo o ambiente antes de aceitar fala; evita disparo com ruído inicial. */
+        const val CALIBRATION_FRAMES = 5
         const val DEFAULT_START_FRAMES = 2
         const val DEFAULT_END_FRAMES = 25
         const val DEFAULT_MAX_SPEECH_FRAMES = 500
@@ -52,7 +55,13 @@ class SpeechGate(
         val level = if (rms.isNaN() || rms.isInfinite() || rms < 0f) 0f else rms
         if (!state.speaking) {
             val noise = adaptNoise(state.noiseFloor, level)
-            val updated = state.copy(noiseFloor = noise)
+            val updated = state.copy(
+                noiseFloor = noise,
+                calibrationFrames = minOf(CALIBRATION_FRAMES, state.calibrationFrames + 1)
+            )
+            // Conta a partir do estado anterior: os primeiros CALIBRATION_FRAMES
+            // frames só medem o ambiente e não acumulam frames de fala.
+            if (state.calibrationFrames < CALIBRATION_FRAMES) return updated to Decision.WAIT
             if (level > startThreshold(updated)) {
                 val above = state.aboveFrames + 1
                 if (above >= startFrames) {

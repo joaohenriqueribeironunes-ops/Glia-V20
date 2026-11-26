@@ -39,6 +39,7 @@ class AmplifiedMic(private val context: Context) {
         private const val SAMPLE_RATE = 16_000
         private const val FRAME_BYTES = 640 // 20 ms em PCM16 mono
         private const val PRE_ROLL_FRAMES = 10
+        private const val TAIL_SILENCE_FRAMES = 5 // 100 ms para o STT finalizar
     }
 
     /**
@@ -73,15 +74,21 @@ class AmplifiedMic(private val context: Context) {
             throw IllegalStateException("microfone indisponível neste aparelho")
         }
 
+        val effectiveGain = MicGain.clamp(gain)
+        // Com ganho de software o AGC nativo comprime duas vezes o sinal e
+        // destrói a forma de onda; ele só é usado quando não há ganho extra.
+        val useNativeAgc = effectiveGain <= MicGain.MIN
         var agc: AutomaticGainControl? = null
         var suppressor: NoiseSuppressor? = null
         var started = false
         try {
-            runCatching { AutomaticGainControl.create(recorder.audioSessionId) }
-                ?.getOrNull()?.let { effect ->
-                    agc = effect
-                    runCatching { effect.enabled = true }
-                }
+            if (useNativeAgc) {
+                runCatching { AutomaticGainControl.create(recorder.audioSessionId) }
+                    ?.getOrNull()?.let { effect ->
+                        agc = effect
+                        runCatching { effect.enabled = true }
+                    }
+            }
             runCatching { NoiseSuppressor.create(recorder.audioSessionId) }
                 ?.getOrNull()?.let { effect ->
                     suppressor = effect
@@ -97,6 +104,8 @@ class AmplifiedMic(private val context: Context) {
             if (file.exists()) file.delete()
             val frame = ByteArray(FRAME_BYTES)
             val preRoll = ArrayDeque<ByteArray>()
+            val conditioner = PcmConditioner()
+            var conditionState = PcmConditioner.initial()
             val gate = SpeechGate()
             var state = SpeechGate.initial()
             var speechDetected = false
@@ -109,7 +118,9 @@ class AmplifiedMic(private val context: Context) {
                     if (read < 0) {
                         throw IllegalStateException("falha ao ler o microfone ($read)")
                     }
-                    val amplified = amplifyChunk(frame, read, MicGain.clamp(gain))
+                    val processed = conditioner.process(frame, read, effectiveGain, conditionState)
+                    conditionState = processed.second
+                    val amplified = processed.first
                     val rms = MicGain.rms(amplified, 0, amplified.size)
                     val (next, decision) = gate.feed(state, rms)
                     state = next
@@ -134,6 +145,8 @@ class AmplifiedMic(private val context: Context) {
                         }
                     }
                 }
+                // Silêncio final ajuda o reconhecedor a fechar a hipótese de fala.
+                if (speechDetected) out.write(ByteArray(FRAME_BYTES * TAIL_SILENCE_FRAMES))
             }
 
             if (!speechDetected) {
@@ -157,16 +170,4 @@ class AmplifiedMic(private val context: Context) {
         }
     }
 
-    private fun amplifyChunk(frame: ByteArray, length: Int, gain: Float): ByteArray {
-        val out = ByteArray(length)
-        var i = 0
-        while (i + 1 < length) {
-            val raw = (frame[i].toInt() or (frame[i + 1].toInt() shl 8)).toShort()
-            val value = MicGain.amplify(raw, gain).toInt() and 0xFFFF
-            out[i] = (value and 0xFF).toByte()
-            out[i + 1] = ((value shr 8) and 0xFF).toByte()
-            i += 2
-        }
-        return out
-    }
 }

@@ -14,6 +14,14 @@ class SpeechGateTest {
         return current to decision
     }
 
+    /** Calibra o ruído e depois alimenta fala até o reconhecedor iniciar. */
+    private fun calibratedState(gate: SpeechGate, rms: Float = 0.02f): SpeechGate.State {
+        var state = run(gate, SpeechGate.initial(), 0f, SpeechGate.CALIBRATION_FRAMES).first
+        repeat(SpeechGate.DEFAULT_START_FRAMES) { state = gate.feed(state, rms).first }
+        assertTrue(state.speaking)
+        return state
+    }
+
     @Test
     fun `silencio nao inicia captura e mantem piso de ruido`() {
         val gate = SpeechGate()
@@ -24,13 +32,26 @@ class SpeechGateTest {
     }
 
     @Test
-    fun `fala fraca inicia apos dois frames`() {
+    fun `fala fraca inicia apos calibracao e dois frames`() {
         val gate = SpeechGate()
-        val first = gate.feed(SpeechGate.initial(), 0.008f)
+        var state = run(gate, SpeechGate.initial(), 0f, SpeechGate.CALIBRATION_FRAMES).first
+        val first = gate.feed(state, 0.008f)
         assertEquals(SpeechGate.Decision.WAIT, first.second)
-        val second = gate.feed(first.first, 0.008f)
+        state = first.first
+        val second = gate.feed(state, 0.008f)
         assertEquals(SpeechGate.Decision.START, second.second)
         assertTrue(second.first.speaking)
+    }
+
+    @Test
+    fun `calibracao evita disparo com ruido alto no inicio`() {
+        val gate = SpeechGate()
+        val (state, decision) = run(gate, SpeechGate.initial(), 0.05f, SpeechGate.CALIBRATION_FRAMES)
+        assertEquals(SpeechGate.Decision.WAIT, decision)
+        assertFalse(state.speaking)
+        assertEquals(SpeechGate.CALIBRATION_FRAMES, state.calibrationFrames)
+        val after = gate.feed(state, 0.05f)
+        assertEquals(SpeechGate.Decision.WAIT, after.second)
     }
 
     @Test
@@ -45,9 +66,7 @@ class SpeechGateTest {
     @Test
     fun `silencio encerra apos vinte frames`() {
         val gate = SpeechGate(endFrames = 20)
-        var state = SpeechGate.initial()
-        repeat(2) { state = gate.feed(state, 0.02f).first }
-        assertTrue(state.speaking)
+        val state = calibratedState(gate)
         val end = run(gate, state, 0f, 20)
         assertEquals(SpeechGate.Decision.END, end.second)
         assertFalse(end.first.speaking)
@@ -56,8 +75,7 @@ class SpeechGateTest {
     @Test
     fun `captura termina no limite maximo de fala`() {
         val gate = SpeechGate(maxSpeechFrames = 5)
-        var state = SpeechGate.initial()
-        repeat(2) { state = gate.feed(state, 0.02f).first }
+        val state = calibratedState(gate)
         val last = run(gate, state, 0.02f, 4)
         assertEquals(SpeechGate.Decision.MAX, last.second)
     }

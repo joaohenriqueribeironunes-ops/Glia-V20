@@ -45,9 +45,17 @@ object VoicePrintMath {
     }
 
     /** Só aceita a fala quando há treino e a similaridade passa do limite. */
-    fun isOwner(reference: FloatArray?, sample: FloatArray?, threshold: Float): Boolean {
-        if (reference == null || sample == null) return false
-        return cosine(reference, sample) >= clampThreshold(threshold)
+    fun isOwner(reference: FloatArray?, sample: FloatArray?, threshold: Float): Boolean =
+        isOwner(if (reference == null) emptyList() else listOf(reference), sample, threshold)
+
+    /**
+     * Várias amostras do treino: usa a MAIOR similaridade em vez da média.
+     * Uma única amostra ruim não derruba o dono da assistente.
+     */
+    fun isOwner(references: List<FloatArray>, sample: FloatArray?, threshold: Float): Boolean {
+        if (sample == null || references.isEmpty()) return false
+        val limit = clampThreshold(threshold)
+        return references.any { it.isValid() && cosine(it, sample) >= limit }
     }
 
     /** Serializa amostras em binário compacto: magic, dim, count, floats little-endian. */

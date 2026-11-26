@@ -1,24 +1,36 @@
 package com.glia.assistant.stt
 
+import kotlin.math.abs
 import kotlin.math.sqrt
 import kotlin.math.tanh
 
 /**
  * Ganho de microfone puro, sem dependência do Android.
  *
- * O limite é suave (tanh) para que uma fala próxima não estoure o PCM em
- * 32767; isso amplifica falas distantes sem introduzir cortes duros.
+ * Abaixo de [LIMITER_KNEE] o ganho é linear: a forma de onda da fala é
+ * preservada, o que melhora o reconhecimento e a impressão de voz. O `tanh`
+ * só atua nos picos, evitando distorção harmônica e clipping duro.
  */
 object MicGain {
     const val MIN = 1.0f
     const val MAX = 4.0f
     const val DEFAULT = 2.0f
+    const val LIMITER_KNEE = 0.85f
 
     fun clamp(value: Float): Float = value.coerceIn(MIN, MAX)
 
+    /** Limiter suave: linear na faixa normal e compressivo apenas nos picos. */
+    fun limit(value: Float): Float {
+        val magnitude = abs(value)
+        if (magnitude <= LIMITER_KNEE) return value
+        val excess = (magnitude - LIMITER_KNEE) / (1f - LIMITER_KNEE)
+        val limited = LIMITER_KNEE + (1f - LIMITER_KNEE) * tanh(excess)
+        return if (value < 0f) -limited else limited
+    }
+
     fun amplify(sample: Short, gain: Float): Short {
         val normalized = sample.toFloat() / 32768f * clamp(gain)
-        return (tanh(normalized) * 32767f).toInt().toShort()
+        return (limit(normalized) * 32767f).toInt().toShort()
     }
 
     /** RMS de um bloco PCM16 little-endian; usado para detectar fala. */

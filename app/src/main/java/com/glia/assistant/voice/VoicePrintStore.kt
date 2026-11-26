@@ -92,8 +92,9 @@ class VoicePrintStore(context: Context) {
     fun verify(pcm: File): VoiceCheck {
         if (!GliaPrefs.voiceLockEnabled(app) || !isEnrolled()) return VoiceCheck.SKIPPED
         val sample = embeddingFromPcm(pcm) ?: return VoiceCheck.UNAVAILABLE
-        val reference = VoicePrintMath.average(samples()) ?: return VoiceCheck.UNAVAILABLE
-        return if (VoicePrintMath.isOwner(reference, sample, GliaPrefs.voiceThreshold(app))) {
+        val references = samples()
+        if (references.isEmpty()) return VoiceCheck.UNAVAILABLE
+        return if (VoicePrintMath.isOwner(references, sample, GliaPrefs.voiceThreshold(app))) {
             VoiceCheck.ALLOW
         } else {
             VoiceCheck.DENY

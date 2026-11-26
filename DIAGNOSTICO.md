@@ -1,19 +1,22 @@
-# Diagnóstico — Glia V27
+# Diagnóstico — Glia V28
 
-A V27 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
-O fluxo é: `AudioRecord` com ganho → PCM amplificado via `EXTRA_AUDIO_SOURCE` →
-verificação opcional da voz com 3D-Speaker CAM++ → `SpeechRecognizer` do sistema →
-`CommandParser`/`CommandEngine` → voz neural VITS/Piper pt-BR feminina embarcada →
-`AudioTrack`.
+A V28 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
+O fluxo é: `AudioRecord` → filtro passa-alta e ganho → PCM amplificado via
+`EXTRA_AUDIO_SOURCE` → verificação opcional da voz com 3D-Speaker CAM++ →
+`SpeechRecognizer` do sistema → `CommandParser`/`CommandEngine` → voz neural
+VITS/Piper pt-BR feminina embarcada → `AudioTrack`.
 
 A instalação da voz é validada por SHA-256 e estrutura antes de ser publicada em
 `filesDir/glia-neural-voice`. O modelo de impressão de voz segue o mesmo critério em
 `filesDir/glia-voiceprint`; os embeddings ficam em `filesDir/voiceprint.bin`.
 Se algum asset estiver ausente ou corrompido, a Glia avisa no status em vez de
-falhar silenciosamente. A captura usa `SpeechGate` com ruído de fundo adaptativo e
-não bloqueia o reconhecimento quando o VAD não encontra fala: os códigos 5/6 acionam
-retry, e a última tentativa usa o microfone do sistema ao vivo. Falha interna na
-verificação de voz é avisada uma vez e não silencia a assistente.
+falhar silenciosamente. A captura usa `SpeechGate` com 100 ms de calibração e ruído de
+fundo adaptativo e não bloqueia o reconhecimento quando o VAD não encontra fala: os
+códigos 5/6 acionam retry, e a última tentativa usa o microfone do sistema ao vivo.
+O PCM passa por filtro passa-alta (~77 Hz) e ganho linear até 0,85 com limiter suave
+só nos picos; o AGC nativo fica desligado quando há ganho de software para evitar
+dupla compressão. A verificação de voz compara a maior similaridade entre as amostras
+do treino. Falha interna nessa verificação é avisada uma vez e não silencia a assistente.
 
 ## Verificação rápida no aparelho
 
@@ -22,9 +25,10 @@ verificação de voz é avisada uma vez e não silencia a assistente.
 3. Use “Testar voz” e confirme que a fala soa feminina e natural, sem rede.
 4. Em Configurações → Microfone, ajuste o ganho (padrão 2x). Comece em 2x e suba
    apenas se “Olá Glia” não for ouvida à distância.
-5. Em Configurações → Somente minha voz, grave as três frases em lugar silencioso.
-   Confirme “Treino concluído” e que o filtro está ativo. Peça a outra pessoa para
-   dizer “Olá Glia”: a Glia não deve responder. Ajuste o rigor se houver falso positivo.
+5. Em Configurações → Somente minha voz, grave as três frases em lugar silencioso,
+   com o mesmo ganho usado no reconhecimento. Confirme “Treino concluído” e que o filtro
+   está ativo. Peça a outra pessoa para dizer “Olá Glia”: a Glia não deve responder.
+   Ajuste o rigor se houver falso positivo.
 6. Toque no tile da central de controle para ligar a escuta; o tile deve mostrar
    “Ouvindo Olá Glia” e o microfone deve permanecer ligado até você desligar o tile.
 7. Com a tela bloqueada, diga “Olá Glia”; o app deve acender a tela e responder.

@@ -1,12 +1,13 @@
-# Testes rigorosos — Glia V27
+# Testes rigorosos — Glia V28
 
 Objeto: validar o motor determinístico de comandos, as notas, a correspondência de
 apps, os assets da voz neural e da impressão de voz sem depender de toque na UI
 (HyperOS bloqueia `INJECT_EVENTS`) nem de device conectado. Toda a lógica crítica foi
-extraída para código puro (JVM) e é coberta por testes determinísticos. A V27 não tem
+extraída para código puro (JVM) e é coberta por testes determinísticos. A V28 não tem
 LLM, Vosk, C++ próprio nem testes nativos; a política de retry, a escuta contínua, o
-ganho do microfone, o detector de fala adaptativo, o planejamento de captura, a decisão
-de verificação de voz e a matemática da impressão de voz são testados isoladamente.
+ganho com limiter, o condicionamento de PCM, a calibração do detector de fala, o
+planejamento de captura, a decisão de verificação de voz e a matemática da impressão
+de voz são testados isoladamente.
 
 ## Como executar
 
@@ -21,11 +22,11 @@ O script:
 1. compila `:app:compileDebugUnitTestKotlin --offline`;
 2. monta classpath explícito (classes de teste + classes do app + junit 4.13.2 +
    hamcrest 1.3 + kotlin-stdlib 2.0.21 + android.jar);
-3. executa `org.junit.runner.JUnitCore` com as 13 classes de teste listadas no script.
+3. executa `org.junit.runner.JUnitCore` com as 14 classes de teste listadas no script.
 
-Resultado observado: `BUILD SUCCESSFUL`, `OK (72 tests)`, `ALL_TESTS_OK`, exit 0.
+Resultado observado: `BUILD SUCCESSFUL`, `OK (78 tests)`, `ALL_TESTS_OK`, exit 0.
 
-## Suíte JVM (72 testes)
+## Suíte JVM (78 testes)
 
 | Classe | O que cobre |
 |---|---|
@@ -37,10 +38,11 @@ Resultado observado: `BUILD SUCCESSFUL`, `OK (72 tests)`, `ALL_TESTS_OK`, exit 0
 | `tts.NeuralVoiceStoreTest` | Extração real do zip (64.254.245 bytes em 11 entradas), idempotência, hash alterado rejeitado, zip malicioso rejeitado, alvo inválido substituído, zip inexistente |
 | `stt.SttRetryPolicyTest` | `ERROR_CLIENT` (2) e `ERROR_AUDIO` (3) disparam retry; `ERROR_NO_MATCH` (5) e timeout (6) disparam retry somente após fonte amplificada; primeira tentativa é amplificada/offline, segunda amplificada/online e terceira com microfone padrão; erros silenciosos 5/6/8 não poluem o último erro |
 | `stt.ContinuousListenPolicyTest` | Timeout de 30 s, reinício imediato (0 ms) e ignorar transcrições enquanto a Glia fala |
-| `stt.MicGainTest` | Limites 1x–4x, amplificação sem clipping e RMS para separar silêncio de fala |
-| `stt.SpeechGateTest` | Ruído adaptativo, fala fraca, dois frames para iniciar, fim por silêncio, limite máximo e reinício do estado |
+| `stt.MicGainTest` | Limites 1x–4x, ganho linear na faixa da fala, limiter só nos picos e RMS para separar silêncio de fala |
+| `stt.PcmConditionerTest` | Remoção de DC por filtro passa-alta, continuidade do estado entre blocos e picos sem estourar PCM16 |
+| `stt.SpeechGateTest` | Calibração inicial de 100 ms sem disparo com ruído, ruído adaptativo, fala fraca, dois frames para iniciar, fim por silêncio e limite máximo |
 | `stt.CapturePlannerTest` | Ganho do usuário nas tentativas amplificadas, ganho padrão no fallback, preferência offline só na primeira e clamp de tentativas |
-| `voice.VoicePrintMathTest` | Limiar 0,35–0,75, média de embeddings, cosseno, `isOwner` e encode/decode VP10 com validação de NaN/Inf e corrupção |
+| `voice.VoicePrintMathTest` | Limiar 0,35–0,75, média de embeddings, cosseno, maior similaridade entre amostras, `isOwner` e encode/decode VP10 com validação de NaN/Inf e corrupção |
 | `voice.VoiceCheckTest` | `DENY` nunca autoriza; `SKIPPED` autoriza; `UNAVAILABLE` respeita a política fail-controlled |
 
 ## Limitação conhecida
@@ -59,6 +61,6 @@ Com o Redmi Note 11S conectado, validar manualmente: treino das três frases em
 Configurações → Somente minha voz, rejeição da voz de outra pessoa, wake word “Olá Glia”
 com tela bloqueada (usando `SpeechRecognizer` do sistema, com e sem PCM amplificado),
 queda automática para o microfone do sistema quando o fabricante ignora
-`EXTRA_AUDIO_SOURCE`, ganho ajustável, lanterna, abertura de aplicativos por voz,
-consulta real ao calendário,
+`EXTRA_AUDIO_SOURCE`, ganho ajustável, eficácia do filtro passa-alta em ambiente com
+vento, lanterna, abertura de aplicativos por voz, consulta real ao calendário,
 qualidade da voz feminina neural e persistência das notas após reinício.

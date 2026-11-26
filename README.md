@@ -1,10 +1,10 @@
 # Glia — Assistente de voz determinística (Android)
 
-Glia V27 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
+Glia V28 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
 Os comandos e a síntese de voz rodam no aparelho; o reconhecimento de fala usa o motor
-do sistema Android, alimentado por PCM amplificado quando o fabricante aceita essa
-entrada, com preferência por processamento offline quando disponível. Opcionalmente,
-um modelo local de impressão de voz limita as respostas somente à voz treinada.
+do sistema Android, alimentado por PCM condicionado e amplificado quando o fabricante
+aceita essa entrada, com preferência por processamento offline quando disponível.
+Opcionalmente, um modelo local de impressão de voz limita as respostas somente à voz treinada.
 
 ## Stack
 
@@ -17,9 +17,11 @@ um modelo local de impressão de voz limita as respostas somente à voz treinada
 - Comandos: parser puro + `CommandEngine`, sem Ternary, sem GGUF e sem tool calling JSON.
 - Notas: arquivo TSV + Base64 no armazenamento privado, com escrita atômica.
 - Impressão de voz: 3D-Speaker CAM++ (`sherpa-onnx` 1.12.40), treino com 3 amostras
-  e verificação por similaridade de cosseno — tudo no aparelho.
+  e verificação pela maior similaridade de cosseno — tudo no aparelho.
+- Condicionamento de PCM: filtro passa-alta (~77 Hz), ganho linear até 0,85 e
+  limiter suave apenas nos picos; sem dupla compressão com o AGC nativo.
 
-## Funcionalidades (V27)
+## Funcionalidades (V28)
 
 1. **Microfone contínuo**: o tile na central de controle liga/desliga o assistente.
    Enquanto estiver ligado, o microfone fica ativo e o reconhecimento reinicia
@@ -39,16 +41,19 @@ um modelo local de impressão de voz limita as respostas somente à voz treinada
 8. **Voz neural feminina**: modelo pt-BR embarcado, com timbre mais natural que o TTS
    do sistema e inferência local de baixo custo.
 9. **Alcance do microfone**: ganho ajustável em Configurações (1x–4x, padrão 2x),
-   AGC/NoiseSuppressor do aparelho e limiter suave para não distorcer falas próximas.
+   filtro passa-alta para vento/manuseio, limiter suave nos picos e AGC nativo apenas
+   quando o ganho é 1x — evita distorção e preserva a forma de onda da fala.
    Se o fabricante não aceitar o PCM amplificado, o app volta automaticamente ao
    microfone do sistema.
 10. **Somente minha voz**: Configurações → Somente minha voz grava três frases suas,
-    extrai embeddings com CAM++ e passa a ignorar fala de outras pessoas. O rigor é
-    ajustável (0,35–0,75; padrão 0,55) e o treino pode ser apagado ou desativado.
-11. **Captura corrigida**: detector de fala com limiar adaptativo ao ruído, retry
-    quando o fabricante ignora o PCM amplificado (inclusive nos códigos 5/6),
-    sessão do reconhecedor reiniciada sem callbacks atrasados e verificação de voz
-    desativada apenas no fallback com microfone ao vivo.
+    extrai embeddings com CAM++ e passa a ignorar fala de outras pessoas. A decisão usa
+    a maior similaridade entre as amostras, então uma gravação ruim não invalida o dono.
+    O rigor é ajustável (0,35–0,75; padrão 0,55) e o treino pode ser apagado ou desativado.
+11. **Captura corrigida**: detector de fala com 100 ms de calibração e limiar
+    adaptativo ao ruído, retry quando o fabricante ignora o PCM amplificado (inclusive
+    nos códigos 5/6), sessão do reconhecedor reiniciada sem callbacks atrasados,
+    100 ms de silêncio no fim da fala e verificação de voz desativada apenas no fallback
+    com microfone ao vivo.
 
 ## Compilar e testar
 
@@ -60,9 +65,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_all_tests.ps1
 ```
 
 APK release: `app/build/outputs/apk/release/app-release.apk`
-(**94.071.844 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
+(**94.073.432 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
 
-Suíte oficial: **72 testes JVM**, `OK (72 tests)` + `ALL_TESTS_OK`.
+Suíte oficial: **78 testes JVM**, `OK (78 tests)` + `ALL_TESTS_OK`.
 O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por isso
 `scripts/run_all_tests.ps1` roda JUnitCore com classpath explícito. Detalhes em
 `docs/testes.md`.
@@ -126,4 +131,4 @@ ativado.
 - `docs/benchmarks.md` — versão, tamanho do APK e estado da medição.
 - `docs/loci-analise.md` — registro histórico da análise que motivou a V20; a V21
   removeu completamente o LLM/Ternary e não copiou código ou assets do Loci.
-- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V27.
+- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V28.

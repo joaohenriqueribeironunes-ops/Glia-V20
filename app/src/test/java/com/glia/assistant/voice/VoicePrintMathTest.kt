@@ -62,6 +62,16 @@ class VoicePrintMathTest {
     }
 
     @Test
+    fun `melhor amostra prevalece sobre treino com amostra ruim`() {
+        val references = listOf(floatArrayOf(1f, 0f), floatArrayOf(-1f, 0f))
+        val sample = floatArrayOf(0.9f, 0.1f)
+        // A média seria zero e rejeitaria o dono; a maior similaridade aceita.
+        assertFalse(VoicePrintMath.isOwner(VoicePrintMath.average(references), sample, 0.55f))
+        assertTrue(VoicePrintMath.isOwner(references, sample, 0.55f))
+        assertFalse(VoicePrintMath.isOwner(emptyList(), sample, 0.55f))
+    }
+
+    @Test
     fun `serializacao das amostras e reversivel e validada`() {
         val samples = listOf(floatArrayOf(0.1f, -0.2f), floatArrayOf(0.3f, 0.4f))
         val bytes = VoicePrintMath.encode(samples)
