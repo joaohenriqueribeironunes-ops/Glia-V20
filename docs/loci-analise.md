@@ -53,11 +53,13 @@ mesma fonte verificada (`prism-ml/Ternary-Bonsai-2-4B-gguf`, commit
 `50ebba61be85e5be07e8083db468ace0fc1bac43`) e instalado por ADB/debug `run-as` porque
 o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
 
-## Situação na V21
+## Situação na V21/V22
 
 - Pacote `llm/`, `GliaMemory`, `MemoryBudget`, `llama.cpp`, `CMakeLists.txt`, testes de
   GGUF/budget e configurações de inferência foram removidos.
-- O build não usa NDK/CMake próprio; resta apenas o `libvosk.so` das dependências.
-- Comandos são determinísticos (`CommandParser`/`CommandEngine`) e a resposta de voz
-  vem do TTS local. Não há mais GGUF, tool calling JSON, KV cache nem tokens/s.
-- O APK passou de 39.772.730 bytes (V20.6) para 36.757.472 bytes (V21).
+- Comandos são determinísticos (`CommandParser`/`CommandEngine`). Não há mais GGUF,
+  tool calling JSON, KV cache nem tokens/s.
+- A V21 removeu o LLM e usou Vosk + TTS do sistema: APK de 36.757.472 bytes.
+- A V22 removeu o Vosk, passou a usar o `SpeechRecognizer` do sistema e embutiu a voz
+  neural feminina pt-BR Dii com sherpa-onnx: APK de 68.237.708 bytes. Nenhum código
+  ou asset do Loci foi copiado em nenhuma das versões.

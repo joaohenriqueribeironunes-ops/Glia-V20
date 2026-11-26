@@ -1,5 +1,5 @@
 -keep class com.glia.assistant.** { *; }
--keep class org.vosk.** { *; }
+-keep class com.k2fsa.sherpa.onnx.** { *; }
 -keep class ai.picovoice.** { *; }
 -keepclasseswithmembernames class * { native <methods>; }
 -keepattributes Signature, InnerClasses, EnclosingMethod

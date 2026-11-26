@@ -213,9 +213,9 @@ fun SettingsScreen(activity: SettingsActivity) {
             )
         }
 
-        SettingsCard("Sobre", "Sem modelo Ternary, sem LLM e sem rede.") {
+        SettingsCard("Sobre", "Sem LLM. Voz neural feminina no aparelho.") {
             Text(
-                "A Glia usa comandos determinísticos no aparelho, Vosk para reconhecimento de fala e a voz neural local do Android. Nenhum áudio ou pensamento sai do telefone.",
+                "A Glia usa comandos determinísticos e a voz neural pt-BR feminina Dii direto no aparelho. O reconhecimento de fala usa o motor do sistema, com preferência por processamento offline quando disponível.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

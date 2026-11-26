@@ -1,43 +1,47 @@
-package com.glia.assistant.stt
+package com.glia.assistant.tts
 
 import java.io.File
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
-/** Contrato validavel do modelo Vosk PT-BR embutido (sem Android). */
-object VoskLayout {
-    const val ASSET_NAME = "vosk-model-small-pt-0.3.zip"
-    const val DIR_NAME = "vosk-model-small-pt-0.3"
-    const val ZIP_SHA256 = "6e1ce909032e1afa7a88e68a3d628ecafff302bdf195befab308826c395e93b7"
-    const val EXPECTED_UNCOMPRESSED_BYTES = 53_552_717L
-    const val EXPECTED_ENTRY_COUNT = 16
+/** Contrato validável do modelo neural pt-BR feminino embutido (sem Android). */
+object NeuralVoiceLayout {
+    const val ASSET_NAME = "glia-neural-voice.zip"
+    const val DIR_NAME = "glia-neural-voice"
+    const val MODEL_NAME = "pt_BR-dii-high.onnx"
+    const val TOKENS_NAME = "tokens.txt"
+    const val ESPEAK_DIR = "espeak-ng-data"
+    const val ZIP_SHA256 = "813eb4e520f115bdb80337e4aa5b05d3d6999ec2e1e1541bf0137ca5ad2b7c38"
+    const val EXPECTED_UNCOMPRESSED_BYTES = 64_254_245L
+    const val EXPECTED_ENTRY_COUNT = 11
 
     val REQUIRED_FILES: List<String> = listOf(
-        "README",
-        "final.mdl",
-        "disambig_tid.int",
-        "phones.txt",
-        "Gr.fst",
-        "HCLr.fst",
-        "mfcc.conf",
-        "word_boundary.int",
-        "ivector/final.ie",
-        "ivector/final.dubm",
-        "ivector/final.mat",
-        "ivector/global_cmvn.stats",
-        "ivector/online_cmvn.conf",
-        "ivector/splice.conf"
+        MODEL_NAME,
+        "$MODEL_NAME.json",
+        TOKENS_NAME,
+        "$ESPEAK_DIR/intonations",
+        "$ESPEAK_DIR/phondata",
+        "$ESPEAK_DIR/phondata-manifest",
+        "$ESPEAK_DIR/phonindex",
+        "$ESPEAK_DIR/phontab",
+        "$ESPEAK_DIR/pt_dict",
+        "$ESPEAK_DIR/lang/roa/pt",
+        "$ESPEAK_DIR/lang/roa/pt-BR"
     )
 
-    /** Remove o prefixo de diretorio do zip e rejeita entradas inseguras. */
+    /** Remove o prefixo do zip e rejeita entradas inseguras. */
     fun safeRelative(entryName: String): String? {
-        if (entryName.startsWith("/") || entryName.contains('\\') || entryName.contains(':')) return null
+        // O zip é gerado no Windows; entra com '\\' em alguns nomes. Normalizamos
+        // o separador antes de validar, mas continuamos rejeitando absolutos,
+        // unidades e qualquer segmento de travessia.
+        val normalized = entryName.replace('\\', '/')
+        if (normalized.startsWith("/") || normalized.contains(':')) return null
         val prefix = "$DIR_NAME/"
-        if (!entryName.startsWith(prefix)) return null
-        val relative = entryName.removePrefix(prefix)
+        if (!normalized.startsWith(prefix)) return null
+        val relative = normalized.removePrefix(prefix)
         if (relative.isEmpty()) return ""
-        if (relative.split('/').any { it == ".." || it == "." }) return null
+        if (relative.split('/').any { it == ".." || it == "." || it.isEmpty() }) return null
         return relative
     }
 
@@ -65,7 +69,7 @@ object VoskLayout {
     fun uncompressedBytes(zip: ZipFile): Long =
         zip.entries().toList().sumOf { if (it.isDirectory) 0L else it.size }
 
-    /** Retorna null quando o zip e seguro e completo; caso contrario, o motivo. */
+    /** Retorna null quando o zip é seguro e completo; caso contrário, o motivo. */
     fun validateZip(zip: ZipFile): String? {
         val names = zip.entries().toList().map { it.name }
         if (names.size != EXPECTED_ENTRY_COUNT) {
@@ -79,7 +83,7 @@ object VoskLayout {
             if (!entry.isDirectory) files.add(relative)
         }
         val missing = REQUIRED_FILES.filter { it !in files }
-        if (missing.isNotEmpty()) return "arquivos obrigatorios ausentes: ${missing.joinToString()}"
+        if (missing.isNotEmpty()) return "arquivos obrigatórios ausentes: ${missing.joinToString()}"
         val unknown = files.filter { it !in REQUIRED_FILES }
         if (unknown.isNotEmpty()) return "arquivos inesperados no zip: ${unknown.joinToString()}"
         return null

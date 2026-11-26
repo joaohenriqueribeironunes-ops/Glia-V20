@@ -2,218 +2,227 @@ package com.glia.assistant.tts
 
 import android.content.Context
 import android.media.AudioAttributes
-import android.os.Bundle
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
+import android.media.AudioFormat
+import android.media.AudioTrack
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
-import com.glia.assistant.commands.VoiceCandidate
-import com.glia.assistant.commands.VoiceRanking
-import java.util.Locale
-import java.util.concurrent.ConcurrentLinkedQueue
+import com.k2fsa.sherpa.onnx.OfflineTts
+import com.k2fsa.sherpa.onnx.OfflineTtsConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * TTS local com preferencia por voz neural pt-BR feminina e baixo custo:
- * usa o motor do sistema (sem rede, sem download dentro do app) e escolhe
- * a melhor voz local disponivel. O pitch levemente elevado reforca o timbre
- * feminino quando o motor nao expoe genero.
+ * Voz neural feminina pt-BR embarcada (VITS/Piper "Dii") via sherpa-onnx.
+ *
+ * Todo o processamento acontece no aparelho: o texto é sintetizado pelo modelo
+ * ONNX e reproduzido em PCM float. Não há rede, não há TextToSpeech do sistema
+ * e nenhum áudio é enviado para fora do dispositivo.
  */
-class GliaTts(context: Context) {
+class GliaTts(private val context: Context) {
     companion object {
         private const val TAG = "GliaTts"
-        private const val MAX_FAILURES = 3
+        private const val SPEED = 1.03f
+        private const val READY_TIMEOUT_MS = 90_000L
     }
 
-    private val appContext = context.applicationContext
-    private val queue = ConcurrentLinkedQueue<String>()
-    private val utteranceCounter = AtomicInteger(0)
-
-    private var tts: TextToSpeech? = null
-
-    @Volatile private var ready = false
-    @Volatile private var speaking = false
-    @Volatile private var initError: String? = null
-    @Volatile private var language = "indisponivel"
-    @Volatile private var voiceName: String? = null
-    private var consecutiveFailures = 0
-
-    var onFinished: (() -> Unit)? = null
-    var onTtsError: ((String) -> Unit)? = null
     var onReady: (() -> Unit)? = null
+    var onTtsError: ((String) -> Unit)? = null
+
+    private val initLatch = CountDownLatch(1)
+    private val executor = Executors.newSingleThreadExecutor { thread ->
+        Thread(thread, "glia-neural-tts").apply { priority = Thread.NORM_PRIORITY }
+    }
+    private val handler = Handler(Looper.getMainLooper())
+    private val generation = AtomicInteger(0)
+    private val queued = AtomicInteger(0)
+
+    @Volatile private var engine: OfflineTts? = null
+    @Volatile private var speaking = false
+    @Volatile private var failure: String? = null
+    @Volatile private var shutdown = false
+    @Volatile private var activeTrack: AudioTrack? = null
 
     init {
-        tts = TextToSpeech(appContext) { status ->
-            if (status != TextToSpeech.SUCCESS) {
-                initError = "motor de voz indisponivel"
-                onTtsError?.invoke(initError!!)
-                return@TextToSpeech
+        executor.execute {
+            try {
+                val dir = NeuralVoiceStore.ensureModel(context)
+                    ?: throw IllegalStateException("Modelo neural não encontrado no APK")
+                val vits = OfflineTtsVitsModelConfig(
+                    model = File(dir, NeuralVoiceLayout.MODEL_NAME).absolutePath,
+                    tokens = File(dir, NeuralVoiceLayout.TOKENS_NAME).absolutePath,
+                    dataDir = File(dir, NeuralVoiceLayout.ESPEAK_DIR).absolutePath,
+                    lexicon = "",
+                    noiseScale = 0.667f,
+                    noiseScaleW = 0.8f,
+                    lengthScale = 1.0f
+                )
+                val config = OfflineTtsConfig(
+                    model = OfflineTtsModelConfig(
+                        vits = vits,
+                        numThreads = 1,
+                        debug = false,
+                        provider = "cpu"
+                    ),
+                    maxNumSentences = 1,
+                    silenceScale = 0.2f
+                )
+                engine = OfflineTts(assetManager = null, config = config)
+                try { Log.i(TAG, "Voz neural pronta: pt-BR feminina (Dii)") } catch (_: Throwable) { }
+                onReady?.invoke()
+            } catch (e: Throwable) {
+                failure = e.message ?: e.javaClass.simpleName
+                Log.w(TAG, "Falha ao carregar voz neural", e)
+                reportError("Não foi possível carregar a voz neural: $failure")
+            } finally {
+                initLatch.countDown()
             }
-            val engine = tts
-            if (engine == null) {
-                initError = "motor de voz indisponivel"
-                return@TextToSpeech
-            }
-            engine.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-
-            var result = engine.setLanguage(Locale("pt", "BR"))
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                result = engine.setLanguage(Locale.getDefault())
-            }
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                engine.setLanguage(Locale.US)
-            }
-
-            applyBestVoice(engine)
-            engine.setSpeechRate(1.02f)
-            engine.setPitch(1.06f)
-            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    speaking = true
-                }
-
-                override fun onDone(utteranceId: String?) {
-                    speakNext()
-                }
-
-                @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) {
-                    handleUtteranceError("falha ao sintetizar")
-                }
-
-                override fun onError(utteranceId: String?, errorCode: Int) {
-                    handleUtteranceError("falha ao sintetizar ($errorCode)")
-                }
-            })
-
-            ready = true
-            initError = null
-            onReady?.invoke()
-            speakNext()
         }
     }
 
-    private fun applyBestVoice(engine: TextToSpeech) {
-        val voices = try {
-            engine.voices
-        } catch (_: Exception) {
-            null
-        } ?: return
+    fun isReady(): Boolean = engine != null
 
-        val candidates = voices.map { voice ->
-            VoiceCandidate(
-                name = voice.name,
-                localeTag = voice.locale.toLanguageTag(),
-                networkRequired = voice.isNetworkConnectionRequired,
-                quality = voice.quality
-            )
-        }
-        val best = VoiceRanking.pick(candidates) ?: return
-        val voice = voices.firstOrNull { it.name == best.name } ?: return
-        if (engine.setVoice(voice) == TextToSpeech.SUCCESS) {
-            voiceName = voice.name
-            language = voice.locale.toLanguageTag()
-            Log.i(TAG, "Voz selecionada: ${voice.name} (${voice.locale.toLanguageTag()})")
-        }
-    }
+    /** Inclui itens na fila: o chamador pode esperar a fala terminar com segurança. */
+    fun isSpeaking(): Boolean = speaking || queued.get() > 0
 
-    @Synchronized
-    private fun speakNext() {
-        val engine = tts ?: return
-        if (!ready) return
-        val next = queue.poll()
-        if (next == null) {
-            speaking = false
-            onFinished?.invoke()
-            return
-        }
-        speaking = true
-        val id = "glia-${utteranceCounter.incrementAndGet()}"
-        val result = engine.speak(next, TextToSpeech.QUEUE_ADD, Bundle(), id)
-        if (result != TextToSpeech.SUCCESS) {
-            consecutiveFailures++
-            if (consecutiveFailures >= MAX_FAILURES) {
-                queue.clear()
-                speaking = false
-                onTtsError?.invoke("falha ao falar")
-            } else {
-                speakNext()
-            }
-        } else {
-            consecutiveFailures = 0
-        }
-    }
-
-    private fun handleUtteranceError(message: String) {
-        consecutiveFailures++
-        speaking = false
-        if (consecutiveFailures >= MAX_FAILURES) {
-            queue.clear()
-            onTtsError?.invoke(message)
-        } else {
-            speakNext()
-        }
+    fun status(): String = when {
+        engine != null -> "pronta · pt-BR feminina · Dii (offline)"
+        failure != null -> "indisponível: $failure"
+        else -> "carregando modelo neural…"
     }
 
     fun speak(text: String) {
-        if (text.isBlank()) return
-        splitSentences(text).forEach { sentence ->
-            if (sentence.isNotBlank()) queue.add(sentence)
+        if (text.isBlank() || shutdown) return
+        val token = generation.get()
+        queued.incrementAndGet()
+        executor.execute {
+            try {
+                if (token != generation.get() || shutdown) return@execute
+                if (!initLatch.await(READY_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    reportError("Tempo limite ao carregar a voz neural")
+                    return@execute
+                }
+                val tts = engine
+                if (tts == null || token != generation.get() || shutdown) return@execute
+                speaking = true
+                try {
+                    val audio = tts.generate(text, 0, SPEED)
+                    play(audio.samples, audio.sampleRate, token)
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Falha ao sintetizar fala", e)
+                    reportError("Falha ao falar: ${e.message ?: e.javaClass.simpleName}")
+                } finally {
+                    speaking = false
+                    activeTrack = null
+                }
+            } finally {
+                queued.decrementAndGet()
+            }
         }
-        speakNext()
     }
 
-    fun isReady(): Boolean = ready
-
-    fun isSpeaking(): Boolean = speaking || queue.isNotEmpty()
-
-    fun status(): String {
-        initError?.let { return "erro: $it" }
-        if (!ready) return "inicializando..."
-        val voice = voiceName?.let { " · $it" } ?: ""
-        return "pronta · $language$voice"
-    }
-
-    fun stop() {
-        queue.clear()
-        speaking = false
+    private fun play(samples: FloatArray, sampleRate: Int, token: Int) {
+        if (samples.isEmpty() || token != generation.get() || shutdown) return
+        val minBuffer = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_FLOAT
+        )
+        val bufferSize = maxOf(minBuffer, samples.size * 4)
+        val attributes = AudioAttributes.Builder()
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .build()
+        val format = AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+            .setSampleRate(sampleRate)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .build()
+        val track = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            AudioTrack.Builder()
+                .setAudioAttributes(attributes)
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(bufferSize)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            AudioTrack(
+                AudioManagerCompat.STREAM_MUSIC,
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_FLOAT,
+                bufferSize,
+                AudioTrack.MODE_STREAM
+            )
+        }
+        activeTrack = track
+        val finished = CountDownLatch(1)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            track.setNotificationMarkerPosition(samples.size)
+            track.setPlaybackPositionUpdateListener(
+                object : AudioTrack.OnPlaybackPositionUpdateListener {
+                    override fun onMarkerReached(audioTrack: AudioTrack?) { finished.countDown() }
+                    override fun onPeriodicNotification(audioTrack: AudioTrack?) = Unit
+                },
+                handler
+            )
+        }
         try {
-            tts?.stop()
-        } catch (_: Exception) {
-            // ignora
+            track.play()
+            var offset = 0
+            val chunk = 8192
+            while (offset < samples.size && token == generation.get() && !shutdown) {
+                val count = minOf(chunk, samples.size - offset)
+                val written = track.write(samples, offset, count, AudioTrack.WRITE_BLOCKING)
+                if (written <= 0) break
+                offset += written
+            }
+            if (token == generation.get() && !shutdown) {
+                val durationMs = samples.size.toLong() * 1000L / sampleRate.toLong()
+                finished.await(durationMs + 2_000L, TimeUnit.MILLISECONDS)
+            }
+        } finally {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    track.setPlaybackPositionUpdateListener(null)
+                }
+                track.stop()
+            } catch (_: Throwable) { }
+            try { track.release() } catch (_: Throwable) { }
+            if (activeTrack === track) activeTrack = null
         }
+    }
+
+    /** Cancela a fala atual e todos os comandos ainda na fila. */
+    fun stop() {
+        generation.incrementAndGet()
+        speaking = false
+        try { activeTrack?.stop() } catch (_: Throwable) { }
+        try { activeTrack?.release() } catch (_: Throwable) { }
+        activeTrack = null
     }
 
     fun shutdown() {
-        queue.clear()
-        speaking = false
-        try {
-            tts?.stop()
-            tts?.shutdown()
-        } catch (_: Exception) {
-            // ignora
-        }
-        tts = null
-        ready = false
+        shutdown = true
+        stop()
+        executor.shutdownNow()
+        try { engine?.release() } catch (_: Throwable) { }
+        engine = null
     }
 
-    private fun splitSentences(text: String): List<String> {
-        val result = ArrayList<String>()
-        val builder = StringBuilder()
-        for (ch in text) {
-            builder.append(ch)
-            if (ch == '.' || ch == '!' || ch == '?' || ch == '\n' || builder.length >= 180) {
-                val sentence = builder.toString().trim()
-                if (sentence.isNotEmpty()) result.add(sentence)
-                builder.setLength(0)
-            }
-        }
-        val tail = builder.toString().trim()
-        if (tail.isNotEmpty()) result.add(tail)
-        return result
+    private fun reportError(message: String) {
+        try { Log.w(TAG, message) } catch (_: Throwable) { }
+        onTtsError?.invoke(message)
+    }
+
+    private object AudioManagerCompat {
+        const val STREAM_MUSIC = 3
     }
 }

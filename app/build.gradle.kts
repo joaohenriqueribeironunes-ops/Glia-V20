@@ -14,8 +14,8 @@ android {
         applicationId = "com.glia.assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "2.1.0"
+        versionCode = 22
+        versionName = "2.2.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -90,7 +90,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     implementation("androidx.datastore:datastore-preferences:1.2.0")
-    implementation("com.alphacephei:vosk-android:0.3.75")
+    // Voz neural pt-BR feminina (VITS/Piper Dii) com runtime sherpa-onnx embutido.
+    implementation(files("libs/sherpa-onnx-static-link-onnxruntime-1.12.40.aar"))
 
     implementation("androidx.core:core-ktx:1.15.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
