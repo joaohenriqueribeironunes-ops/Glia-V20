@@ -1,6 +1,6 @@
 # Glia — Assistente de voz determinística (Android)
 
-Glia V28 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
+Glia V29 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
 Os comandos e a síntese de voz rodam no aparelho; o reconhecimento de fala usa o motor
 do sistema Android, alimentado por PCM condicionado e amplificado quando o fabricante
 aceita essa entrada, com preferência por processamento offline quando disponível.
@@ -21,14 +21,14 @@ Opcionalmente, um modelo local de impressão de voz limita as respostas somente 
 - Condicionamento de PCM: filtro passa-alta (~77 Hz), ganho linear até 0,85 e
   limiter suave apenas nos picos; sem dupla compressão com o AGC nativo.
 
-## Funcionalidades (V28)
+## Funcionalidades (V29)
 
 1. **Microfone contínuo**: o tile na central de controle liga/desliga o assistente.
    Enquanto estiver ligado, o microfone fica ativo e o reconhecimento reinicia
    imediatamente após cada fala ou silêncio; o mic só é liberado quando você desliga
-   o tile. Dizer **“Olá Glia”** (também aceita “Glia”/“Clia”) aciona os comandos mesmo
-   com a tela bloqueada, sem precisar repetir a palavra-chave a cada vez. O app usa
-   `setShowWhenLocked`/`setTurnScreenOn` e wake lock parcial.
+   o tile. Dizer apenas **“Glia”** aciona os comandos na primeira fala, mesmo com a tela
+   bloqueada; “Glia, que horas são?” executa na hora, sem exigir uma segunda fala. O app
+   usa `setShowWhenLocked`/`setTurnScreenOn` e wake lock parcial.
 2. **Hora e data**: “Que horas são?”, “Que dia é hoje?”.
 3. **Calendário**: “Tenho compromissos hoje/amanhã/esta semana?” usa `READ_CALENDAR`
    e responde com até três eventos próximos.
@@ -54,6 +54,10 @@ Opcionalmente, um modelo local de impressão de voz limita as respostas somente 
     nos códigos 5/6), sessão do reconhecedor reiniciada sem callbacks atrasados,
     100 ms de silêncio no fim da fala e verificação de voz desativada apenas no fallback
     com microfone ao vivo.
+12. **Ativação em uma fala**: o detector usa o token exato “Glia” (normaliza acentos,
+    caixa e pontuação), mantém “Olá Glia” apenas por compatibilidade e não dispara em
+    palavras como “glioblastoma”. O comando que vem depois de “Glia” é aproveitado na
+    mesma transcrição, sem cair em “Não entendi”.
 
 ## Compilar e testar
 
@@ -65,9 +69,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_all_tests.ps1
 ```
 
 APK release: `app/build/outputs/apk/release/app-release.apk`
-(**94.073.432 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
+(**94.074.272 bytes / ~89,7 MB**; R8, assinatura local, somente `arm64-v8a`).
 
-Suíte oficial: **78 testes JVM**, `OK (78 tests)` + `ALL_TESTS_OK`.
+Suíte oficial: **84 testes JVM**, `OK (84 tests)` + `ALL_TESTS_OK`.
 O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por isso
 `scripts/run_all_tests.ps1` roda JUnitCore com classpath explícito. Detalhes em
 `docs/testes.md`.
@@ -131,4 +135,4 @@ ativado.
 - `docs/benchmarks.md` — versão, tamanho do APK e estado da medição.
 - `docs/loci-analise.md` — registro histórico da análise que motivou a V20; a V21
   removeu completamente o LLM/Ternary e não copiou código ou assets do Loci.
-- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V28.
+- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V29.

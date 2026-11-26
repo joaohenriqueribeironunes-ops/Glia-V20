@@ -1,21 +1,21 @@
-# Benchmarks e metodologia — Glia V28
+# Benchmarks e metodologia — Glia V29
 
 ## Estado da versão
 
 | Medida | Valor |
 |---|---|
-| Versão | V28 (versionCode 28, versionName 2.7.0) |
+| Versão | V29 (versionCode 29, versionName 2.8.0) |
 | Device usado no desenvolvimento | Redmi Note 11S, `product:miel_in`, `model:2201117SI`, serial `9XCAROHMCY65I7MB` |
-| APK release | **94.073.432 bytes (~89,7 MB)** — ARM64, R8, assinatura local |
+| APK release | **94.074.272 bytes (~89,7 MB)** — ARM64, R8, assinatura local |
 | Build release | `:app:assembleRelease --offline` OK |
 | Runtime | Comandos determinísticos em Kotlin; sem LLM, sem GGUF e sem JNI próprio |
-| STT | `SpeechRecognizer` do sistema, pt-BR, alimentado por PCM amplificado via `EXTRA_AUDIO_SOURCE`; retry em `ERROR_CLIENT`/`ERROR_AUDIO`/`NO_MATCH`/timeout e fallback para microfone ao vivo; sem Vosk embutido |
+| STT | `SpeechRecognizer` do sistema, pt-BR, alimentado por PCM amplificado via `EXTRA_AUDIO_SOURCE`; wake word exata “Glia”, comando na mesma frase aproveitado; retry em `ERROR_CLIENT`/`ERROR_AUDIO`/`NO_MATCH`/timeout e fallback para microfone ao vivo; sem Vosk embutido |
 | Impressão de voz | 3D-Speaker CAM++ (`3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx`, 28.281.165 bytes, 16 kHz), opcional, verificação local pela maior similaridade de cosseno entre amostras |
 | Asset da impressão | `glia-voiceprint.zip`, 25.801.265 bytes, 1 entrada ONNX |
 | Voz neural | VITS/Piper `pt_BR-dii-high.onnx` (63.511.201 bytes), feminina, 22.050 Hz |
 | Runtime da voz | sherpa-onnx 1.12.40 AAR estático; `libsherpa-onnx-jni.so` ARM64 de 22.249.744 bytes |
 | Asset da voz | `glia-neural-voice.zip`, 58.800.891 bytes, 64.254.245 descomprimidos, 11 entradas |
-| Testes JVM | 78 testes, 0 falhas (JUnitCore) |
+| Testes JVM | 84 testes, 0 falhas (JUnitCore) |
 | Testes nativos | removidos junto com llama.cpp/GliaMemory |
 
 ## Comparação com V21
@@ -28,8 +28,9 @@ usando o TTS do sistema. A V22 trocou esse conjunto por:
 A V25 passou para **68.259.040 bytes** com o ganho do microfone e a captura PCM
 própria. A V26 sobe para **94.068.464 bytes** por incluir o modelo CAM++ de impressão
 de voz (25.801.265 bytes no zip). A V27 ficou em **94.071.844 bytes** após as correções
-de captura e retry. A V28 fica em **94.073.432 bytes** com condicionamento de PCM e
-testes adicionais, ainda somente `arm64-v8a`. É o custo aceito para ter voz neural
+de captura e retry. A V28 ficou em **94.073.432 bytes** com condicionamento de PCM e
+testes adicionais. A V29 fica em **94.074.272 bytes** com o detector de wake word exato
+“Glia” e mais 6 testes, ainda somente `arm64-v8a`. É o custo aceito para ter voz neural
 feminina dedicada e filtro de falante, ambos offline.
 
 ## Custo de processamento
@@ -76,6 +77,6 @@ Não há estatísticas de prefill/decode/tokens por segundo.
 - HyperOS bloqueia injeção de input por ADB (`INJECT_EVENTS`); toques e tela bloqueada
   precisam de validação manual.
 - `testDebugUnitTest` do Gradle falha com `ClassNotFoundException` no Test Executor;
-  a suíte oficial roda via `scripts/run_all_tests.ps1` (78/78 OK).
+  a suíte oficial roda via `scripts/run_all_tests.ps1` (84/84 OK).
 - O reconhecimento depende do motor de fala do sistema; o app solicita modo offline,
   mas o fabricante pode decidir usar rede.

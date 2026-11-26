@@ -53,7 +53,7 @@ mesma fonte verificada (`prism-ml/Ternary-Bonsai-2-4B-gguf`, commit
 `50ebba61be85e5be07e8083db468ace0fc1bac43`) e instalado por ADB/debug `run-as` porque
 o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
 
-## Situação na V21/V22/V23/V24/V25/V26/V27/V28
+## Situação na V21/V22/V23/V24/V25/V26/V27/V28/V29
 
 - Pacote `llm/`, `GliaMemory`, `MemoryBudget`, `llama.cpp`, `CMakeLists.txt`, testes de
   GGUF/budget e configurações de inferência foram removidos.
@@ -85,4 +85,9 @@ o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
   picos, AGC nativo somente em 1x, filtro passa-alta de ~77 Hz, calibração de 100 ms
   no detector de fala, 100 ms de silêncio final e verificação de voz pela maior
   similaridade entre as amostras. A suíte passou a 78 testes puros. APK de
-  94.073.432 bytes. Nenhum código ou asset do Loci foi copiado em nenhuma versão.
+  94.073.432 bytes.
+- A V29 simplificou a ativação: apenas “Glia” é reconhecida na primeira fala, o comando
+  na mesma frase é executado sem passar por “Não entendi”, e “Olá Glia” ficou apenas como
+  compatibilidade. O detector usa token exato e tem testes próprios. A suíte passou a
+  84 testes puros. APK de 94.074.272 bytes. Nenhum código ou asset do Loci foi copiado
+  em nenhuma versão.

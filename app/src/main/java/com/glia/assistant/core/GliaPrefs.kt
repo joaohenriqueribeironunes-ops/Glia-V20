@@ -24,7 +24,7 @@ object GliaPrefs {
     }
 
     fun tileSubtitle(context: Context): String =
-        prefs(context).getString(KEY_TILE_SUBTITLE, "Ola Glia") ?: "Ola Glia"
+        prefs(context).getString(KEY_TILE_SUBTITLE, "Glia") ?: "Glia"
 
     fun setTileSubtitle(context: Context, subtitle: String) {
         prefs(context).edit().putString(KEY_TILE_SUBTITLE, subtitle).apply()

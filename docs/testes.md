@@ -1,13 +1,13 @@
-# Testes rigorosos — Glia V28
+# Testes rigorosos — Glia V29
 
 Objeto: validar o motor determinístico de comandos, as notas, a correspondência de
 apps, os assets da voz neural e da impressão de voz sem depender de toque na UI
 (HyperOS bloqueia `INJECT_EVENTS`) nem de device conectado. Toda a lógica crítica foi
-extraída para código puro (JVM) e é coberta por testes determinísticos. A V28 não tem
+extraída para código puro (JVM) e é coberta por testes determinísticos. A V29 não tem
 LLM, Vosk, C++ próprio nem testes nativos; a política de retry, a escuta contínua, o
 ganho com limiter, o condicionamento de PCM, a calibração do detector de fala, o
-planejamento de captura, a decisão de verificação de voz e a matemática da impressão
-de voz são testados isoladamente.
+planejamento de captura, a detecção de “Glia”, a decisão de verificação de voz e a
+matemática da impressão de voz são testados isoladamente.
 
 ## Como executar
 
@@ -22,11 +22,11 @@ O script:
 1. compila `:app:compileDebugUnitTestKotlin --offline`;
 2. monta classpath explícito (classes de teste + classes do app + junit 4.13.2 +
    hamcrest 1.3 + kotlin-stdlib 2.0.21 + android.jar);
-3. executa `org.junit.runner.JUnitCore` com as 14 classes de teste listadas no script.
+3. executa `org.junit.runner.JUnitCore` com as 15 classes de teste listadas no script.
 
-Resultado observado: `BUILD SUCCESSFUL`, `OK (78 tests)`, `ALL_TESTS_OK`, exit 0.
+Resultado observado: `BUILD SUCCESSFUL`, `OK (84 tests)`, `ALL_TESTS_OK`, exit 0.
 
-## Suíte JVM (78 testes)
+## Suíte JVM (84 testes)
 
 | Classe | O que cobre |
 |---|---|
@@ -42,6 +42,7 @@ Resultado observado: `BUILD SUCCESSFUL`, `OK (78 tests)`, `ALL_TESTS_OK`, exit 0
 | `stt.PcmConditionerTest` | Remoção de DC por filtro passa-alta, continuidade do estado entre blocos e picos sem estourar PCM16 |
 | `stt.SpeechGateTest` | Calibração inicial de 100 ms sem disparo com ruído, ruído adaptativo, fala fraca, dois frames para iniciar, fim por silêncio e limite máximo |
 | `stt.CapturePlannerTest` | Ganho do usuário nas tentativas amplificadas, ganho padrão no fallback, preferência offline só na primeira e clamp de tentativas |
+| `stt.WakeWordTest` | “Glia” sozinho e com pontuação/acento, variantes “Olá Glia”, comando na mesma frase indo para o `CommandParser`, preservação de verbos e rejeição de “glioblastoma” |
 | `voice.VoicePrintMathTest` | Limiar 0,35–0,75, média de embeddings, cosseno, maior similaridade entre amostras, `isOwner` e encode/decode VP10 com validação de NaN/Inf e corrupção |
 | `voice.VoiceCheckTest` | `DENY` nunca autoriza; `SKIPPED` autoriza; `UNAVAILABLE` respeita a política fail-controlled |
 
@@ -58,7 +59,7 @@ testes instrumentados (`androidTest`); a validação em device depende de execu�
 ## Validação pendente em device
 
 Com o Redmi Note 11S conectado, validar manualmente: treino das três frases em
-Configurações → Somente minha voz, rejeição da voz de outra pessoa, wake word “Olá Glia”
+Configurações → Somente minha voz, rejeição da voz de outra pessoa, wake word “Glia” sozinha e “Glia, que horas são?” na mesma frase,
 com tela bloqueada (usando `SpeechRecognizer` do sistema, com e sem PCM amplificado),
 queda automática para o microfone do sistema quando o fabricante ignora
 `EXTRA_AUDIO_SOURCE`, ganho ajustável, eficácia do filtro passa-alta em ambiente com

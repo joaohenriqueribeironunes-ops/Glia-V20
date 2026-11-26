@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">Glia</string>
     <string name="tile_label">Glia</string>
-    <string name="wake_word">Olá Glia</string>
+    <string name="wake_word">Glia</string>
     <string name="listening">Ouvindo…</string>
     <string name="thinking">Preparando…</string>
     <string name="speaking">Falando…</string>

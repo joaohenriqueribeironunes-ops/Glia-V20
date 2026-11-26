@@ -5,7 +5,7 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import com.glia.assistant.core.GliaPrefs
 
-/** Liga/desliga o loop de palavra-chave "Olá Glia". */
+/** Liga/desliga o loop de palavra-chave "Glia". */
 class GliaTileService : TileService() {
 
     override fun onStartListening() {
@@ -34,7 +34,7 @@ class GliaTileService : TileService() {
         qsTile?.apply {
             state = if (active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
             label = "Glia"
-            subtitle = if (active) "Ouvindo Olá Glia" else "Desligada"
+            subtitle = if (active) "Ouvindo Glia" else "Desligada"
             updateTile()
         }
     }

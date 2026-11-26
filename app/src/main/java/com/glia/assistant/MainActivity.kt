@@ -249,7 +249,7 @@ fun MainScreen(activity: MainActivity, tileActive: Boolean) {
 
         Text(
             text = when (mode) {
-                GliaMode.IDLE -> if (tileActive) "Diga \"Olá Glia\"" else "Ative o tile para ouvir"
+                GliaMode.IDLE -> if (tileActive) "Diga \"Glia\"" else "Ative o tile para ouvir"
                 GliaMode.LISTENING -> "Ouvindo..."
                 GliaMode.THINKING -> "Preparando..."
                 GliaMode.SPEAKING -> "Falando..."

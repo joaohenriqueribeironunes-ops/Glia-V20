@@ -108,11 +108,11 @@ fun SettingsScreen(activity: SettingsActivity) {
             )
         }
 
-        SettingsCard("Ativação", "Tile na central de controle e palavra-chave \"Olá Glia\".") {
+        SettingsCard("Ativação", "Tile na central de controle e palavra-chave \"Glia\".") {
             Text(
                 "1. Abra a central de controle e adicione o tile Glia.\n" +
                     "2. Toque no tile para ligar a escuta.\n" +
-                    "3. Diga \"Olá Glia\" mesmo com a tela bloqueada.\n" +
+                    "3. Diga apenas \"Glia\" mesmo com a tela bloqueada.\n" +
                     "4. Permita sobreposição e ignore a otimização de bateria para o HyperOS não encerrar a escuta.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -249,7 +249,7 @@ fun SettingsScreen(activity: SettingsActivity) {
             )
         }
 
-        SettingsCard("Comandos de voz", "Fale depois de \"Olá Glia\".") {
+        SettingsCard("Comandos de voz", "Diga \"Glia\" e fale o comando — ou fale tudo na mesma frase.") {
             Text(
                 "• Que horas são?\n" +
                     "• Que dia é hoje?\n" +

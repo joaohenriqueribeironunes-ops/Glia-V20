@@ -68,7 +68,7 @@ class CommandEngine(context: Context) {
         const val HELP =
             "Eu consigo dizer a hora e a data, consultar seus compromissos, ligar ou desligar " +
                 "a lanterna, abrir aplicativos e guardar pensamentos para aliviar a carga cognitiva. " +
-                "Diga: Ol\u00e1 Glia, quero diminuir a carga cognitiva."
+                "Diga: Glia, quero diminuir a carga cognitiva."
     }
 }
 

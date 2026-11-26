@@ -31,6 +31,7 @@ import com.glia.assistant.stt.CapturePlanner
 import com.glia.assistant.stt.ContinuousListenPolicy
 import com.glia.assistant.stt.SttRetryPolicy
 import com.glia.assistant.stt.SystemStt
+import com.glia.assistant.stt.WakeWord
 import com.glia.assistant.voice.VoiceCheck
 import com.glia.assistant.voice.VoiceDecision
 import com.glia.assistant.tts.GliaTts
@@ -247,7 +248,9 @@ class GliaVoiceService : Service() {
                     override fun onPartial(text: String) {
                         if (token != listenGeneration) return
                         if (mode == GliaMode.LISTENING) GliaState.setPartial(text)
-                        if (fromOwner && mode == GliaMode.IDLE && !tts.isSpeaking() && isWakeWord(text)) {
+                        if (fromOwner && mode == GliaMode.IDLE &&
+                            !tts.isSpeaking() && WakeWord.isWakeWord(text)
+                        ) {
                             triggerWake(text)
                         }
                     }
@@ -310,16 +313,6 @@ class GliaVoiceService : Service() {
         }
     }
 
-    private fun isWakeWord(text: String): Boolean {
-        val normalized = CommandParser.normalize(text)
-        if (normalized.contains("ola glia") || normalized.contains("alo glia") ||
-            normalized.contains("hey glia")
-        ) return true
-        return normalized.split(' ').any { token ->
-            token == "glia" || token == "clia" || token.startsWith("glia")
-        }
-    }
-
     /**
      * Único loop de microfone. Não há janela de silêncio entre as escutas: após
      * qualquer resultado (inclusive silêncio), a próxima começa na mesma thread.
@@ -330,7 +323,7 @@ class GliaVoiceService : Service() {
         GliaState.setMode(GliaMode.IDLE)
         GliaState.setPartial("")
         GliaState.setAssistantStatus("microfone ligado")
-        updateNotification("Microfone ligado — diga \"Olá Glia\"")
+        updateNotification("Microfone ligado — diga \"Glia\"")
         listenJob = scope.launch {
             while (isActive && !shuttingDown && GliaPrefs.isTileActive(this@GliaVoiceService)) {
                 val mode = if (phase == ListeningPhase.IDLE) GliaMode.IDLE else GliaMode.LISTENING
@@ -348,10 +341,18 @@ class GliaVoiceService : Service() {
     /** Entrega a fala ao fluxo correto sem desligar o microfone. */
     private fun dispatch(text: String) {
         if (shuttingDown || ContinuousListenPolicy.ignoreWhileSpeaking(tts.isSpeaking())) return
+
+        // "Glia" sozinho ativa na primeira fala. Se o comando vier na mesma
+        // frase, ele é executado aqui e não exige uma segunda fala.
+        val wake = WakeWord.detect(text)
+        if (wake.activated) {
+            if (phase != ListeningPhase.AWAITING_COMMAND) triggerWake(text)
+            if (wake.hasCommand) processCommand(wake.command)
+            return
+        }
+
         when (phase) {
-            ListeningPhase.IDLE -> {
-                if (isWakeWord(text)) triggerWake(text)
-            }
+            ListeningPhase.IDLE -> Unit
             ListeningPhase.AWAITING_COMMAND -> processCommand(text)
             ListeningPhase.AWAITING_THOUGHT -> scope.launch { saveThought(text) }
         }
