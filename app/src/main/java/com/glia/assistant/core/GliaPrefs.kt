@@ -9,6 +9,7 @@ object GliaPrefs {
 
     const val KEY_TILE_ACTIVE = "tile_active"
     const val KEY_TILE_SUBTITLE = "tile_subtitle"
+    const val KEY_MIC_GAIN = "mic_gain"
 
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -25,5 +26,14 @@ object GliaPrefs {
 
     fun setTileSubtitle(context: Context, subtitle: String) {
         prefs(context).edit().putString(KEY_TILE_SUBTITLE, subtitle).apply()
+    }
+
+    /** Ganho do microfone em 1x..4x; 2x é o padrão. */
+    fun micGain(context: Context): Float =
+        prefs(context).getFloat(KEY_MIC_GAIN, com.glia.assistant.stt.MicGain.DEFAULT)
+
+    fun setMicGain(context: Context, gain: Float) {
+        val value = com.glia.assistant.stt.MicGain.clamp(gain)
+        prefs(context).edit().putFloat(KEY_MIC_GAIN, value).apply()
     }
 }

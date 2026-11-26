@@ -22,10 +22,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -34,6 +38,8 @@ import com.glia.assistant.BuildConfig
 import com.glia.assistant.commands.CognitiveNotesStore
 import com.glia.assistant.core.GliaPrefs
 import com.glia.assistant.service.GliaVoiceService
+import com.glia.assistant.stt.MicGain
+import java.util.Locale
 
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,7 +87,7 @@ fun SettingsScreen(activity: SettingsActivity) {
             color = MaterialTheme.colorScheme.primary
         )
         Text(
-            "Glia ${BuildConfig.VERSION_NAME} · 100% offline",
+            "Glia ${BuildConfig.VERSION_NAME} · voz neural local",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -179,6 +185,29 @@ fun SettingsScreen(activity: SettingsActivity) {
                 accent = GliaAccent.Teal,
                 onClick = { calendarLauncher.launch(Manifest.permission.READ_CALENDAR) },
                 modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        SettingsCard("Microfone", "Ganho para alcançar falas mais distantes.") {
+            var gain by remember { mutableFloatStateOf(GliaPrefs.micGain(ctx)) }
+            Text(
+                "Ganho: ${String.format(Locale.ROOT, "%.1f", gain)}x",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Slider(
+                value = gain,
+                onValueChange = { value ->
+                    gain = MicGain.clamp(value)
+                    GliaPrefs.setMicGain(ctx, gain)
+                },
+                valueRange = MicGain.MIN..MicGain.MAX,
+                steps = 6,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "Mais ganho aumenta o alcance, mas também amplifica o ruído do ambiente.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 

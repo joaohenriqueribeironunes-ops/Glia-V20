@@ -25,6 +25,8 @@ import com.glia.assistant.commands.CommandEngine
 import com.glia.assistant.commands.CommandParser
 import com.glia.assistant.commands.VoiceCommand
 import com.glia.assistant.core.GliaPrefs
+import com.glia.assistant.stt.AmplifiedAudioSource
+import com.glia.assistant.stt.AmplifiedMic
 import com.glia.assistant.stt.ContinuousListenPolicy
 import com.glia.assistant.stt.SttRetryPolicy
 import com.glia.assistant.stt.SystemStt
@@ -74,6 +76,7 @@ class GliaVoiceService : Service() {
     private val scope = CoroutineScope(Dispatchers.Default + serviceJob + exceptionHandler)
 
     private lateinit var stt: SystemStt
+    private lateinit var amplifiedMic: AmplifiedMic
     private lateinit var tts: GliaTts
     private lateinit var commandEngine: CommandEngine
     private lateinit var notes: CognitiveNotesStore
@@ -91,6 +94,7 @@ class GliaVoiceService : Service() {
         instance = this
         createNotificationChannel()
         stt = SystemStt(this)
+        amplifiedMic = AmplifiedMic(this)
         tts = GliaTts(this)
         commandEngine = CommandEngine(this)
         notes = CognitiveNotesStore(this)
@@ -154,15 +158,14 @@ class GliaVoiceService : Service() {
         for (attempt in 0 until SttRetryPolicy.MAX_ATTEMPTS) {
             if (shuttingDown || !stt.isAvailable()) return null
             val outcome = listenOnceAttempt(
-                timeoutMs,
-                mode,
-                SttRetryPolicy.preferOffline(attempt)
+                timeoutMs = timeoutMs,
+                mode = mode,
+                preferOffline = SttRetryPolicy.preferOffline(attempt),
+                useAmplifiedSource = SttRetryPolicy.useAmplifiedSource(attempt)
             )
             if (outcome.text != null) return outcome.text
             val code = outcome.errorCode ?: continue
-            if (SttRetryPolicy.shouldRetryWithoutOffline(code) &&
-                attempt < SttRetryPolicy.MAX_ATTEMPTS - 1
-            ) {
+            if (SttRetryPolicy.shouldRetry(code) && attempt < SttRetryPolicy.MAX_ATTEMPTS - 1) {
                 withContext(Dispatchers.Main) { stt.reset() }
                 continue
             }
@@ -177,67 +180,101 @@ class GliaVoiceService : Service() {
     private suspend fun listenOnceAttempt(
         timeoutMs: Long,
         mode: GliaMode,
-        preferOffline: Boolean
-    ): ListenOutcome = withContext(Dispatchers.Main) {
+        preferOffline: Boolean,
+        useAmplifiedSource: Boolean
+    ): ListenOutcome {
         if (shuttingDown || !stt.isAvailable()) {
-            return@withContext ListenOutcome(
+            return ListenOutcome(
                 null,
                 -1,
                 "Reconhecimento de fala indisponível neste aparelho"
             )
         }
-        val token = ++listenGeneration
-        val result = CompletableDeferred<ListenOutcome>()
-        val started = stt.listen(object : SystemStt.Listener {
-            override fun onReady() {
-                if (token == listenGeneration) {
-                    GliaState.setAssistantStatus(
-                        if (phase == ListeningPhase.IDLE) "microfone ligado" else "ouvindo comando"
+
+        var source: AmplifiedAudioSource? = null
+        if (useAmplifiedSource) {
+            val captured = withContext(Dispatchers.IO) {
+                runCatching {
+                    amplifiedMic.capture(
+                        timeoutMs,
+                        GliaPrefs.micGain(this@GliaVoiceService)
                     )
                 }
             }
-
-            override fun onPartial(text: String) {
-                if (token != listenGeneration) return
-                if (mode == GliaMode.LISTENING) GliaState.setPartial(text)
-                if (mode == GliaMode.IDLE && !tts.isSpeaking() && isWakeWord(text)) {
-                    triggerWake(text)
-                }
+            val audio = captured.getOrNull()
+            if (captured.isFailure) {
+                // Fabricante sem suporte a EXTRA_AUDIO_SOURCE: usa o microfone padrão.
+                Log.w(TAG, "Captura amplificada falhou; usando microfone do sistema", captured.exceptionOrNull())
+            } else if (audio == null) {
+                return ListenOutcome(
+                    null,
+                    SttRetryPolicy.SPEECH_TIMEOUT_CODE,
+                    "nenhuma fala detectada"
+                )
+            } else {
+                source = audio
             }
-
-            override fun onRms(rms: Float) {
-                if (token == listenGeneration) {
-                    GliaState.setAmplitude(((rms + 2f) / 12f).coerceIn(0f, 1f))
-                }
-            }
-
-            override fun onResult(text: String) {
-                if (token != listenGeneration) return
-                listenGeneration++
-                result.complete(ListenOutcome(text.ifBlank { null }))
-            }
-
-            override fun onError(code: Int, message: String) {
-                if (token != listenGeneration) return
-                listenGeneration++
-                result.complete(ListenOutcome(null, code, message))
-            }
-        }, preferOffline)
-        if (!started) {
-            listenGeneration++
-            return@withContext ListenOutcome(
-                null,
-                -1,
-                "Reconhecimento de fala indisponível neste aparelho"
-            )
         }
-        val answer = withTimeoutOrNull(timeoutMs) { result.await() }
-            ?: ListenOutcome(null, SttRetryPolicy.SPEECH_TIMEOUT_CODE, "nenhuma fala detectada")
-        if (token == listenGeneration && result.isActive) {
-            listenGeneration++
-            stt.cancel()
+
+        return withContext(Dispatchers.Main) {
+            try {
+                val token = ++listenGeneration
+                val result = CompletableDeferred<ListenOutcome>()
+                val started = stt.listen(object : SystemStt.Listener {
+                    override fun onReady() {
+                        if (token == listenGeneration) {
+                            GliaState.setAssistantStatus(
+                                if (phase == ListeningPhase.IDLE) "microfone ligado" else "ouvindo comando"
+                            )
+                        }
+                    }
+
+                    override fun onPartial(text: String) {
+                        if (token != listenGeneration) return
+                        if (mode == GliaMode.LISTENING) GliaState.setPartial(text)
+                        if (mode == GliaMode.IDLE && !tts.isSpeaking() && isWakeWord(text)) {
+                            triggerWake(text)
+                        }
+                    }
+
+                    override fun onRms(rms: Float) {
+                        if (token == listenGeneration) {
+                            GliaState.setAmplitude(((rms + 2f) / 12f).coerceIn(0f, 1f))
+                        }
+                    }
+
+                    override fun onResult(text: String) {
+                        if (token != listenGeneration) return
+                        listenGeneration++
+                        result.complete(ListenOutcome(text.ifBlank { null }))
+                    }
+
+                    override fun onError(code: Int, message: String) {
+                        if (token != listenGeneration) return
+                        listenGeneration++
+                        result.complete(ListenOutcome(null, code, message))
+                    }
+                }, preferOffline, source)
+                if (!started) {
+                    listenGeneration++
+                    ListenOutcome(
+                        null,
+                        -1,
+                        "Reconhecimento de fala indisponível neste aparelho"
+                    )
+                } else {
+                    val answer = withTimeoutOrNull(timeoutMs) { result.await() }
+                        ?: ListenOutcome(null, SttRetryPolicy.SPEECH_TIMEOUT_CODE, "nenhuma fala detectada")
+                    if (token == listenGeneration && result.isActive) {
+                        listenGeneration++
+                        stt.cancel()
+                    }
+                    answer
+                }
+            } finally {
+                source?.close()
+            }
         }
-        answer
     }
 
     private fun isWakeWord(text: String): Boolean {

@@ -27,7 +27,13 @@ class SystemStt(private val context: Context) {
         fun onError(code: Int, message: String) {}
     }
 
-    private class Session(val id: Int, val listener: Listener)
+    private class Session(
+        val id: Int,
+        val listener: Listener,
+        val source: AmplifiedAudioSource? = null
+    ) {
+        fun closeSource() = source?.close()
+    }
 
     private val available = SpeechRecognizer.isRecognitionAvailable(context)
     private var recognizer: SpeechRecognizer? = newRecognizer()
@@ -42,14 +48,22 @@ class SystemStt(private val context: Context) {
      * Alguns fabricantes devolvem ERROR_CLIENT quando EXTRA_PREFER_OFFLINE é usado
      * sem um modelo offline instalado. A segunda tentativa remove essa exigência.
      */
-    private fun recognitionIntent(preferOffline: Boolean): Intent =
-        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+    private fun recognitionIntent(
+        preferOffline: Boolean,
+        source: AmplifiedAudioSource?
+    ): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
+        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        if (source != null) {
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source.descriptor)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, source.channelCount)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, source.encoding)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, source.sampleRate)
         }
+    }
 
     private var nextId = 0
     private var active: Session? = null
@@ -72,12 +86,14 @@ class SystemStt(private val context: Context) {
         override fun onError(error: Int) {
             val session = active
             active = null
+            session?.closeSource()
             if (session != null) session.listener.onError(error, errorMessage(error))
         }
 
         override fun onResults(results: Bundle?) {
             val session = active
             active = null
+            session?.closeSource()
             val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull().orEmpty()
             session?.listener?.onResult(text.trim())
@@ -95,27 +111,46 @@ class SystemStt(private val context: Context) {
     fun isAvailable(): Boolean = available && recognizer != null
 
     @MainThread
-    fun listen(listener: Listener, preferOffline: Boolean = true): Boolean {
-        val engine = recognizer ?: return false
+    fun listen(
+        listener: Listener,
+        preferOffline: Boolean = true,
+        source: AmplifiedAudioSource? = null
+    ): Boolean {
+        val engine = recognizer ?: run {
+            source?.close()
+            return false
+        }
+        active?.closeSource()
         active = null
-        val session = Session(++nextId, listener)
+        val session = Session(++nextId, listener, source)
         active = session
         engine.setRecognitionListener(bridge)
-        engine.startListening(recognitionIntent(preferOffline))
+        val start = runCatching { engine.startListening(recognitionIntent(preferOffline, source)) }
+        if (start.isFailure) {
+            active = null
+            session.closeSource()
+            // Avisa o serviço para aplicar a política de retry em vez de travar.
+            session.listener.onError(
+                SpeechRecognizer.ERROR_CLIENT,
+                errorMessage(SpeechRecognizer.ERROR_CLIENT)
+            )
+        }
         return true
     }
 
     /** Cancela a escuta atual; nenhum callback da sessão antiga será entregue. */
     @MainThread
     fun cancel() {
-        if (active == null) return
+        val session = active ?: return
         active = null
+        session.closeSource()
         runCatching { recognizer?.cancel() }
     }
 
     /** Recria o reconhecedor após ERROR_CLIENT, que o deixa em estado inválido. */
     @MainThread
     fun reset() {
+        active?.closeSource()
         active = null
         runCatching {
             recognizer?.setRecognitionListener(null)
@@ -127,6 +162,7 @@ class SystemStt(private val context: Context) {
 
     @MainThread
     fun destroy() {
+        active?.closeSource()
         active = null
         runCatching {
             recognizer?.setRecognitionListener(null)
