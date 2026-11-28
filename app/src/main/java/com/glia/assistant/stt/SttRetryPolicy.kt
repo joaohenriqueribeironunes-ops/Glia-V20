@@ -23,12 +23,16 @@ object SttRetryPolicy {
         errorCode == ERROR_CLIENT_CODE || errorCode == ERROR_AUDIO_CODE
 
     /**
-     * Quando o PCM amplificado é ignorado pelo fabricante, a fala termina antes
-     * do startListening e o sistema responde 5/6. Nesses casos a próxima
-     * tentativa usa o microfone do sistema, que capta a fala em tempo real.
+     * V33: em escuta contínua, 5/6 quase sempre significa apenas silêncio na
+     * janela. Repetir com o microfone ao vivo faria o recognizer abrir e fechar
+     * o microfone a cada janela (o "pisca-pisca" do indicador). Por isso 5/6 só
+     * repetem da tentativa 0 para a 1, ambas ainda com o PCM amplificado.
+     * Erros reais de fonte (2/3) continuam podendo chegar à tentativa ao vivo.
      */
-    fun shouldRetryAfterAmplified(errorCode: Int): Boolean =
-        shouldRetry(errorCode) || errorCode == NO_MATCH_CODE || errorCode == SPEECH_TIMEOUT_CODE
+    fun shouldRetryAfterAmplified(errorCode: Int, attempt: Int): Boolean {
+        if (shouldRetry(errorCode)) return true
+        return (errorCode == NO_MATCH_CODE || errorCode == SPEECH_TIMEOUT_CODE) && attempt == 0
+    }
 
     /** Mantido para compatibilidade com a correção da V23. */
     fun shouldRetryWithoutOffline(errorCode: Int): Boolean = shouldRetry(errorCode)

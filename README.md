@@ -1,6 +1,6 @@
 # Glia — Assistente de voz determinística (Android)
 
-Glia V32 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
+Glia V33 é um assistente de voz determinístico, sem LLM e sem serviços de IA na nuvem.
 Os comandos e a síntese de voz rodam no aparelho; o reconhecimento de fala usa o motor
 do sistema Android, alimentado por janelas contínuas de PCM condicionado e amplificado
 quando o fabricante aceita essa entrada, com preferência por processamento offline
@@ -24,16 +24,17 @@ tile ligado, a Glia fica em um único modo roxo ouvindo tudo.
 - Condicionamento de PCM: filtro passa-alta (~77 Hz), ganho linear até 0,85 e
   limiter suave apenas nos picos; sem dupla compressão com o AGC nativo.
 
-## Funcionalidades (V32)
+## Funcionalidades (V33)
 
 1. **Microfone contínuo, um único modo**: o tile na central de controle liga/desliga
    a assistente. Ao ligar, o `AudioRecord` é aberto uma única vez e permanece ativo
-   até você desligar o tile — não há detector de fala, janela de silêncio nem modo
-   azul separado. O áudio é entregue em janelas de 3 s com 500 ms de sobreposição,
-   e transcrições repetidas são descartadas. Não é preciso dizer “Glia”:
-   **“Que horas são?”** é entendido de primeira, mesmo com a tela bloqueada.
-   Fala comum é ignorada em silêncio. O app usa `setShowWhenLocked`/
-   `setTurnScreenOn` e wake lock parcial. O orbe e a ilha ficam sempre roxos.
+   até você desligar o tile — inclusive durante respostas, testes de voz e janelas
+   silenciosas. Não há detector de fala, janela de silêncio nem modo azul separado.
+   O áudio é entregue em janelas de 3 s com 500 ms de sobreposição, e transcrições
+   repetidas são descartadas. Não é preciso dizer “Glia”: **“Que horas são?”** é
+   entendido de primeira, mesmo com a tela bloqueada. Fala comum é ignorada em
+   silêncio. O app usa `setShowWhenLocked`/`setTurnScreenOn` e wake lock parcial
+   mantido até o desligamento. O orbe e a ilha ficam sempre roxos.
 2. **Hora e data**: “Que horas são?”, “Que dia é hoje?”.
 3. **Calendário**: “Tenho compromissos hoje/amanhã/esta semana?” usa `READ_CALENDAR`
    e responde com até três eventos próximos.
@@ -56,10 +57,13 @@ tile ligado, a Glia fica em um único modo roxo ouvindo tudo.
     a maior similaridade entre as amostras, então uma gravação ruim não invalida o dono.
     O rigor é ajustável (0,35–0,75; padrão 0,55) e o treino pode ser apagado ou desativado.
 11. **Captura corrigida**: janelas contínuas com sobreposição e 100 ms de silêncio
-    no fim, sem VAD que impeça o reconhecimento; retry quando o fabricante ignora o
-    PCM amplificado (inclusive nos códigos 5/6), sessão do reconhecedor reiniciada
-    sem callbacks atrasados e verificação de voz desativada apenas no fallback com
-    microfone ao vivo.
+    no fim, sem VAD que impeça o reconhecimento. Os códigos 5/6 (silêncio) só podem
+    repetir uma vez, ainda com o PCM amplificado; nunca abrem o microfone ao vivo
+    por causa de uma janela vazia. O fallback ao vivo fica reservado a erros reais
+    de fonte (ERROR_CLIENT/ERROR_AUDIO). O serviço entra em foreground antes de abrir
+    o microfone, não repete `startForeground` a cada comando e só fecha o
+    `AudioRecord` quando o tile é desligado. Sessão do reconhecedor reiniciada sem
+    callbacks atrasados.
 12. **Comandos secundários diretos**: o detector `SecondaryCommand` normaliza a fala,
     remove saudações/cortesias e o prefixo opcional “Glia” e entrega o resultado ao
     parser determinístico. Apenas comandos reconhecidos geram resposta; “Glia” sozinha,
@@ -78,9 +82,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_all_tests.ps1
 ```
 
 APK release: `app/build/outputs/apk/release/app-release.apk`
-(**107.918.967 bytes / ~102,9 MB**; R8, assinatura local, somente `arm64-v8a`).
+(**107.920.203 bytes / ~102,9 MB**; R8, assinatura local, somente `arm64-v8a`).
 
-Suíte oficial: **93 testes JVM**, `OK (93 tests)` + `ALL_TESTS_OK`.
+Suíte oficial: **95 testes JVM**, `OK (95 tests)` + `ALL_TESTS_OK`.
 O Gradle Test Executor deste ambiente falha com `ClassNotFoundException`; por isso
 `scripts/run_all_tests.ps1` roda JUnitCore com classpath explícito. Detalhes em
 `docs/testes.md`.
@@ -154,4 +158,4 @@ ativado.
 - `docs/benchmarks.md` — versão, tamanho do APK e estado da medição.
 - `docs/loci-analise.md` — registro histórico da análise que motivou a V20; a V21
   removeu completamente o LLM/Ternary e não copiou código ou assets do Loci.
-- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V32.
+- `DIAGNOSTICO.md` — checklist de validação em aparelho e logs da V33.

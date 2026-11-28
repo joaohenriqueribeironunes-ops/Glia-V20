@@ -76,8 +76,16 @@ class AmplifiedMic(private val context: Context) {
     @Volatile
     private var closed = false
 
-    /** Abre o microfone uma vez. Deve ser chamado na thread do loop de escuta. */
+    /**
+     * Abre o microfone uma vez. Chamadas repetidas com o microfone já aberto
+     * apenas atualizam o ganho, sem recriar o [AudioRecord] (o que faria o
+     * indicador do sistema piscar).
+     */
     fun start(gain: Float) {
+        if (recorder != null && !closed) {
+            this.gain = MicGain.clamp(gain)
+            return
+        }
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.RECORD_AUDIO
@@ -176,6 +184,27 @@ class AmplifiedMic(private val context: Context) {
             channelCount = 1,
             encoding = AudioFormat.ENCODING_PCM_16BIT
         )
+    }
+
+    /**
+     * Descarta o áudio que ficou no buffer enquanto o reconhecedor ou a voz
+     * da Glia estavam ativos. O [AudioRecord] continua aberto.
+     */
+    fun flush() {
+        val rec = recorder ?: return
+        if (closed) return
+        val frame = ByteArray(FRAME_BYTES)
+        try {
+            while (!closed &&
+                rec.read(frame, 0, frame.size, AudioRecord.READ_NON_BLOCKING) > 0
+            ) {
+                // descarta
+            }
+        } catch (_: Exception) {
+            // Melhor esforço: uma leitura falha não deve derrubar a escuta.
+        }
+        conditionState = PcmConditioner.initial()
+        tail.clear()
     }
 
     /** Fecha o microfone somente quando a Glia é desligada. */

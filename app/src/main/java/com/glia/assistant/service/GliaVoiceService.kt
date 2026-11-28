@@ -5,12 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import android.service.quicksettings.TileService
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.glia.assistant.MainActivity
@@ -35,6 +37,7 @@ import com.glia.assistant.ui.GliaMode
 import com.glia.assistant.ui.GliaState
 import com.glia.assistant.ui.NotesActivity
 import com.glia.assistant.voice.VoicePrintStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
@@ -64,6 +67,7 @@ class GliaVoiceService : Service() {
         const val ACTION_SWITCH_VOICE = "com.glia.assistant.SWITCH_VOICE"
         const val EXTRA_VOICE_ID = "com.glia.assistant.VOICE_ID"
         private const val VOICE_REJECTED_CODE = -2
+        private const val LISTEN_RESTART_DELAY_MS = 1_000L
 
         @Volatile
         var instance: GliaVoiceService? = null
@@ -88,12 +92,15 @@ class GliaVoiceService : Service() {
 
     private var listenJob: Job? = null
     private var commandJob: Job? = null
+    private var restartJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val transcriptDeduper = TranscriptDeduper()
 
     @Volatile private var shuttingDown = false
     @Volatile private var listenGeneration = 0
     @Volatile private var phase = ListeningPhase.IDLE
+    @Volatile private var restartOnExit = true
+    private var foregroundStarted = false
     private var voiceUnavailableNotified = false
 
     override fun onCreate() {
@@ -112,44 +119,56 @@ class GliaVoiceService : Service() {
         GliaState.setSttStatus(
             if (stt.isAvailable()) "reconhecimento do sistema" else "indisponível neste aparelho"
         )
-        if (GliaPrefs.isTileActive(this)) {
-            startContinuousListening()
-        } else {
-            GliaState.setAssistantStatus("desligada")
-            GliaState.setMode(GliaMode.IDLE)
-        }
+        // O microfone só é aberto depois que o serviço entra em foreground
+        // (onStartCommand). Abrir antes disso falha no Android 14+.
+        GliaState.setAssistantStatus(
+            if (GliaPrefs.isTileActive(this)) "iniciando" else "desligada"
+        )
+        GliaState.setMode(GliaMode.IDLE)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        ensureForeground("Iniciando Glia...")
+        // Parar não precisa (nem deve) abrir um foreground de microfone.
+        if (intent?.action == ACTION_STOP) {
+            stopEverything()
+            return START_NOT_STICKY
+        }
+        val foreground = ensureForeground("Iniciando Glia...")
         when (intent?.action) {
-            ACTION_STOP -> {
-                stopEverything()
-                return START_NOT_STICKY
-            }
             ACTION_SWITCH_VOICE -> {
                 val next = OfflineVoices.fromId(intent.getStringExtra(EXTRA_VOICE_ID))
                 tts.switchVoice(next)
                 GliaState.setTtsStatus(tts.status())
+                if (!GliaPrefs.isTileActive(this)) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
                 return START_STICKY
             }
             ACTION_TEST_TTS -> {
                 cancelWork(stopTts = true)
                 scope.launch {
                     testTts()
-                    startContinuousListening()
+                    // O microfone ficou aberto durante o teste; descarta o
+                    // eco da própria voz antes de voltar a reconhecer.
+                    withContext(Dispatchers.IO) { amplifiedMic.flush() }
+                    if (GliaPrefs.isTileActive(this@GliaVoiceService)) {
+                        startContinuousListening()
+                    } else {
+                        stopEverything()
+                    }
                 }
                 return START_STICKY
             }
             ACTION_START_LISTENING -> {
-                startContinuousListening()
+                if (foreground) startContinuousListening()
                 if (!GliaPrefs.isTileActive(this)) {
                     GliaState.setAssistantStatus("ative o tile Glia para usar a voz")
                 }
                 return START_STICKY
             }
             else -> {
-                startContinuousListening()
+                if (foreground) startContinuousListening()
                 return START_STICKY
             }
         }
@@ -182,7 +201,7 @@ class GliaVoiceService : Service() {
             if (outcome.errorCode == VOICE_REJECTED_CODE) return null
             val code = outcome.errorCode ?: continue
             val retryable = if (plan.amplifiedSource) {
-                SttRetryPolicy.shouldRetryAfterAmplified(code)
+                SttRetryPolicy.shouldRetryAfterAmplified(code, plan.attempt)
             } else {
                 SttRetryPolicy.shouldRetry(code)
             }
@@ -323,7 +342,12 @@ class GliaVoiceService : Service() {
      * repetidas pela sobreposição são descartadas.
      */
     private fun startContinuousListening() {
-        if (shuttingDown || !GliaPrefs.isTileActive(this) || listenJob?.isActive == true) return
+        if (shuttingDown || !GliaPrefs.isTileActive(this)) return
+        restartOnExit = true
+        if (listenJob?.isActive == true) return
+
+        restartJob?.cancel()
+        restartJob = null
         wakeLock = acquireLock(wakeLock, "glia:mic")
         phase = ListeningPhase.IDLE
         GliaState.setMode(GliaMode.LISTENING)
@@ -332,6 +356,7 @@ class GliaVoiceService : Service() {
         updateNotification("Microfone ligado — ouvindo tudo")
         transcriptDeduper.reset()
         listenJob = scope.launch {
+            val self = coroutineContext[Job]
             try {
                 withContext(Dispatchers.IO) {
                     amplifiedMic.start(GliaPrefs.micGain(this@GliaVoiceService))
@@ -349,13 +374,42 @@ class GliaVoiceService : Service() {
                     val delayMs = ContinuousListenPolicy.RESTART_DELAY_MS
                     if (delayMs > 0) delay(delayMs)
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 Log.e(TAG, "Falha no microfone contínuo", error)
                 GliaState.setLastError("Microfone: ${error.message ?: "falha interna"}")
+                // Só uma falha real reabre o AudioRecord; o caminho normal
+                // mantém o mesmo microfone aberto entre as janelas.
+                withContext(Dispatchers.IO) { amplifiedMic.stop() }
             } finally {
-                amplifiedMic.stop()
-                releaseLock(wakeLock)
-                wakeLock = null
+                if (listenJob === self) listenJob = null
+                if (restartOnExit &&
+                    !shuttingDown &&
+                    GliaPrefs.isTileActive(this@GliaVoiceService)
+                ) {
+                    scheduleListenRestart()
+                } else if (shuttingDown || !GliaPrefs.isTileActive(this@GliaVoiceService)) {
+                    amplifiedMic.stop()
+                    releaseLock(wakeLock)
+                    wakeLock = null
+                }
+            }
+        }
+    }
+
+    /**
+     * Se o loop de reconhecimento cair sem que o usuário desligue o tile, ele
+     * volta sozinho sem fechar o microfone. O atraso evita um laço apertado em
+     * caso de falha persistente do reconhecedor.
+     */
+    private fun scheduleListenRestart() {
+        if (shuttingDown || !GliaPrefs.isTileActive(this)) return
+        restartJob?.cancel()
+        restartJob = scope.launch {
+            delay(LISTEN_RESTART_DELAY_MS)
+            if (!shuttingDown && GliaPrefs.isTileActive(this@GliaVoiceService)) {
+                startContinuousListening()
             }
         }
     }
@@ -443,6 +497,9 @@ class GliaVoiceService : Service() {
     }
 
     private fun cancelWork(stopTts: Boolean) {
+        restartOnExit = false
+        restartJob?.cancel()
+        restartJob = null
         listenGeneration++
         listenJob?.cancel()
         listenJob = null
@@ -459,6 +516,12 @@ class GliaVoiceService : Service() {
 
     private fun stopEverything() {
         shuttingDown = true
+        restartOnExit = false
+        // O tile da central de controle também precisa refletir o desligamento,
+        // inclusive quando a parada veio pela notificação.
+        GliaPrefs.setTileActive(this, false)
+        GliaPrefs.setTileSubtitle(this, "Desligada")
+        requestTileRefresh()
         cancelWork(stopTts = true)
         amplifiedMic.stop()
         scope.launch(Dispatchers.Main) { stt.destroy() }
@@ -500,17 +563,45 @@ class GliaVoiceService : Service() {
         }
     }
 
-    private fun ensureForeground(text: String) {
-        val notification = buildNotification(text)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIF_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+    /**
+     * Entra em foreground uma única vez. Repetir startForeground a cada
+     * comando pode reavaliar o tipo "microphone" e reiniciar o acesso ao
+     * microfone; depois da primeira vez só atualizamos a notificação.
+     */
+    private fun ensureForeground(text: String): Boolean {
+        if (foregroundStarted) {
+            updateNotification(text)
+            return true
+        }
+        return try {
+            val notification = buildNotification(text)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIF_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                )
+            } else {
+                startForeground(NOTIF_ID, notification)
+            }
+            foregroundStarted = true
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Falha ao entrar em foreground", e)
+            GliaState.setLastError("Serviço: ${e.message ?: "falha ao iniciar"}")
+            false
+        }
+    }
+
+    private fun requestTileRefresh() {
+        try {
+            TileService.requestListeningState(
+                this,
+                ComponentName(this, GliaTileService::class.java)
             )
-        } else {
-            startForeground(NOTIF_ID, notification)
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao atualizar o tile", e)
         }
     }
 
@@ -573,7 +664,9 @@ class GliaVoiceService : Service() {
             val lock = existing ?: manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag).apply {
                 setReferenceCounted(false)
             }
-            lock.acquire(15 * 60 * 1000L)
+            // Sem timeout: o lock acompanha o tile e só é liberado no
+            // desligamento explícito ou na destruição do serviço.
+            if (!lock.isHeld) lock.acquire()
             lock
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao adquirir wake lock", e)
@@ -591,9 +684,13 @@ class GliaVoiceService : Service() {
 
     override fun onDestroy() {
         shuttingDown = true
+        restartOnExit = false
+        restartJob?.cancel()
         listenJob?.cancel()
         commandJob?.cancel()
         amplifiedMic.stop()
+        releaseLock(wakeLock)
+        wakeLock = null
         scope.launch(Dispatchers.Main) { stt.destroy() }
         tts.shutdown()
         serviceJob.cancel()

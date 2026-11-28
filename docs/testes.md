@@ -1,9 +1,9 @@
-# Testes rigorosos — Glia V32
+# Testes rigorosos — Glia V33
 
 Objeto: validar o motor determinístico de comandos, as notas, a correspondência de
 apps, os assets da voz neural e da impressão de voz sem depender de toque na UI
 (HyperOS bloqueia `INJECT_EVENTS`) nem de device conectado. Toda a lógica crítica foi
-extraída para código puro (JVM) e é coberta por testes determinísticos. A V32 não tem
+extraída para código puro (JVM) e é coberta por testes determinísticos. A V33 não tem
 LLM, Vosk, C++ próprio nem testes nativos; a política de retry, a escuta contínua em
 janelas sobrepostas, o ganho com limiter, o condicionamento de PCM, o buffer de
 sobreposição, a deduplicação de transcrições, o planejamento de captura, o comando
@@ -25,9 +25,9 @@ O script:
    hamcrest 1.3 + kotlin-stdlib 2.0.21 + android.jar);
 3. executa `org.junit.runner.JUnitCore` com as 18 classes de teste listadas no script.
 
-Resultado observado: `BUILD SUCCESSFUL`, `OK (93 tests)`, `ALL_TESTS_OK`, exit 0.
+Resultado observado: `BUILD SUCCESSFUL`, `OK (95 tests)`, `ALL_TESTS_OK`, exit 0.
 
-## Suíte JVM (93 testes)
+## Suíte JVM (95 testes)
 
 | Classe | O que cobre |
 |---|---|
@@ -38,13 +38,13 @@ Resultado observado: `BUILD SUCCESSFUL`, `OK (93 tests)`, `ALL_TESTS_OK`, exit 0
 | `tts.NeuralVoiceAssetTest` | Asset embutido existe, hash e tamanho conhecidos, zip completo e seguro, `safeRelative` normaliza separadores do Windows e rejeita travessia/`..`/`:`, zip maligno; diretório exige todos os arquivos obrigatórios |
 | `tts.NeuralVoiceStoreTest` | Extração real do zip (64.254.245 bytes em 11 entradas), idempotência, hash alterado rejeitado, zip malicioso rejeitado, alvo inválido substituído, zip inexistente |
 | `tts.OfflineVoiceTest` | Seleção por id (`dii`/`cadu` e fallback), asset Cadu com hash/tamanho/estrutura esperados (13.840.894 bytes, 19.087.043 descomprimidos, modelo 18.343.859), asset Dii íntegro pela fachada, `safeRelative` rejeitando prefixo errado/travessia/absoluto e os 11 arquivos obrigatórios do Cadu |
-| `stt.SttRetryPolicyTest` | `ERROR_CLIENT` (2) e `ERROR_AUDIO` (3) disparam retry; `ERROR_NO_MATCH` (5) e timeout (6) disparam retry somente após fonte amplificada; primeira tentativa é amplificada/offline, segunda amplificada/online e terceira com microfone padrão; erros silenciosos 5/6/8 não poluem o último erro |
+| `stt.SttRetryPolicyTest` | `ERROR_CLIENT` (2) e `ERROR_AUDIO` (3) disparam retry e ainda podem chegar à tentativa ao vivo; `ERROR_NO_MATCH` (5) e timeout (6) só repetem da tentativa 0 para a 1, ambas com PCM amplificado, e nunca abrem o microfone ao vivo por silêncio; primeira tentativa é amplificada/offline, segunda amplificada/online e terceira com microfone padrão; erros silenciosos 5/6/8 não poluem o último erro |
 | `stt.ContinuousListenPolicyTest` | Timeout de 10 s por janela, reinício imediato (0 ms) e ignorar transcrições enquanto a Glia fala |
 | `stt.MicGainTest` | Limites 1x–4x, ganho linear na faixa da fala, limiter só nos picos e RMS para separar silêncio de fala |
 | `stt.PcmConditionerTest` | Remoção de DC por filtro passa-alta, continuidade do estado entre blocos e picos sem estourar PCM16 |
 | `stt.CaptureWindowTest` | Janela de 3 s a 16 kHz, sobreposição de 500 ms, silêncio final de 100 ms e critério de emissão por bytes escritos |
 | `stt.TranscriptDeduperTest` | Primeira transcrição aceita, repetição normalizada na janela ignorada, texto livre após a janela, vazio rejeitado e reset |
-| `stt.RollingTailTest` | Acúmulo sem perda, rotação mantendo os últimos bytes e sobreposição de 500 ms entre janelas |
+| `stt.RollingTailTest` | Acúmulo sem perda, rotação mantendo os últimos bytes, `clear()` descartando a sobreposição e sobreposição de 500 ms entre janelas |
 | `stt.CapturePlannerTest` | Ganho do usuário nas tentativas amplificadas, ganho padrão no fallback, preferência offline só na primeira e clamp de tentativas |
 | `stt.SecondaryCommandTest` | Comandos diretos com e sem prefixo “Glia”, saudações/cortesias removidas, “Glia” sozinha e conversas ignoradas, verbos preservados e rejeição de “glioblastoma” |
 | `voice.VoicePrintMathTest` | Limiar 0,35–0,75, média de embeddings, cosseno, maior similaridade entre amostras, `isOwner` e encode/decode VP10 com validação de NaN/Inf e corrupção |
@@ -67,8 +67,9 @@ Configurações → Somente minha voz, rejeição da voz de outra pessoa, comand
 como “Que horas são?” e “Glia, que horas são?” com tela bloqueada (usando o
 `SpeechRecognizer` do sistema, com e sem PCM amplificado), “Glia” sozinha e conversas
 comuns ignoradas em silêncio, tile único roxo com o microfone ouvindo tudo sem modo
-azul, queda automática para o microfone do sistema quando o fabricante ignora
-`EXTRA_AUDIO_SOURCE`, ganho ajustável, eficácia do filtro passa-alta em ambiente com
+azul, indicador de microfone sem piscar em janelas de silêncio, durante respostas e
+no “Testar voz”, queda para o microfone do sistema somente em erro real de fonte
+(`ERROR_CLIENT`/`ERROR_AUDIO`), ganho ajustável, eficácia do filtro passa-alta em ambiente com
 vento, lanterna, abertura de aplicativos por voz, consulta real ao calendário,
 qualidade das vozes neurais (Dii e Cadu), troca de modelo em tempo de execução e
 persistência das notas após reinício.

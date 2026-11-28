@@ -34,6 +34,16 @@ class RollingTailTest {
     }
 
     @Test
+    fun `clear descarta a sobreposicao acumulada`() {
+        val tail = RollingTail(capacity = 10, keepOnRotate = 6)
+        val chunk = byteArrayOf(1, 2, 3, 4)
+        tail.append(chunk, chunk.size)
+        tail.clear()
+        assertEquals(0, tail.length)
+        assertEquals(0, tail.snapshot().size)
+    }
+
+    @Test
     fun `sobreposicao de audio tem 500 ms`() {
         val tail = RollingTail(
             capacity = CaptureWindow.overlapBytes() * 2,

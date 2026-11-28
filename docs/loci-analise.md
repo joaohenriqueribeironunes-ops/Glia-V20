@@ -53,7 +53,7 @@ mesma fonte verificada (`prism-ml/Ternary-Bonsai-2-4B-gguf`, commit
 `50ebba61be85e5be07e8083db468ace0fc1bac43`) e instalado por ADB/debug `run-as` porque
 o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
 
-## Situação na V21/V22/V23/V24/V25/V26/V27/V28/V29/V30/V31/V32
+## Situação na V21/V22/V23/V24/V25/V26/V27/V28/V29/V30/V31/V32/V33
 
 - Pacote `llm/`, `GliaMemory`, `MemoryBudget`, `llama.cpp`, `CMakeLists.txt`, testes de
   GGUF/budget e configurações de inferência foram removidos.
@@ -104,4 +104,10 @@ o HyperOS bloqueia `INJECT_EVENTS` e o Loci não exporta seu arquivo privado.
   18.343.859 bytes; zip de 13.840.894 bytes), selecionável em Configurações ao lado da
   voz Dii padrão. A preferência é persistida e a troca recria o engine sem reiniciar o
   serviço. A suíte foi para 93 testes puros em 18 classes. APK de 107.918.967 bytes.
-  Nenhum código ou asset do Loci foi copiado em nenhuma versão.
+- A V33 corrigiu o microfone que piscava: o serviço só abre o `AudioRecord` depois de
+  entrar em foreground, `startForeground` é idempotente, o capturador permanece aberto
+  durante respostas e testes, e os códigos 5/6 (silêncio) nunca acionam o microfone ao
+  vivo — só repetem uma vez com PCM amplificado. O wake lock acompanha o tile e a
+  parada pela notificação também desliga o tile. A suíte foi para 95 testes puros em
+  18 classes. APK de 107.920.203 bytes. Nenhum código ou asset do Loci foi copiado em
+  nenhuma versão.

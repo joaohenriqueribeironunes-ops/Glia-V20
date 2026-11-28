@@ -16,12 +16,24 @@ class SttRetryPolicyTest {
     }
 
     @Test
-    fun `no match e timeout disparam retry somente apos fonte amplificada`() {
+    fun `silencio nunca troca para o microfone ao vivo`() {
         assertFalse(SttRetryPolicy.shouldRetry(5))
         assertFalse(SttRetryPolicy.shouldRetry(6))
-        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(5))
-        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(6))
-        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(2))
+        // 5/6 na tentativa 0 podem repetir uma vez, ainda com PCM amplificado.
+        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(5, 0))
+        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(6, 0))
+        // Na tentativa 1 a proxima seria a 2 (microfone ao vivo); nao permitir.
+        assertFalse(SttRetryPolicy.shouldRetryAfterAmplified(5, 1))
+        assertFalse(SttRetryPolicy.shouldRetryAfterAmplified(6, 1))
+        assertFalse(SttRetryPolicy.shouldRetryAfterAmplified(5, 2))
+    }
+
+    @Test
+    fun `erros reais de fonte ainda podem usar o microfone ao vivo`() {
+        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(2, 0))
+        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(2, 1))
+        assertTrue(SttRetryPolicy.shouldRetryAfterAmplified(3, 1))
+        assertFalse(SttRetryPolicy.shouldRetryAfterAmplified(4, 1))
     }
 
     @Test

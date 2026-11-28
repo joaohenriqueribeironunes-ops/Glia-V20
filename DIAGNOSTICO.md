@@ -1,6 +1,6 @@
-# Diagnóstico — Glia V32
+# Diagnóstico — Glia V33
 
-A V32 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
+A V33 não tem LLM, Ternary, GGUF, llama.cpp, Vosk, JNI próprio nem tool calling JSON.
 O fluxo é: `AudioRecord` contínuo → filtro passa-alta e ganho → janelas de 3 s com
 500 ms de sobreposição via `EXTRA_AUDIO_SOURCE` → verificação opcional da voz com
 3D-Speaker CAM++ → `SpeechRecognizer` do sistema → `SecondaryCommand` →
@@ -15,8 +15,12 @@ voz segue o mesmo critério em `filesDir/glia-voiceprint`; os embeddings ficam e
 Se algum asset estiver ausente ou corrompido, a Glia avisa no status em vez de
 falhar silenciosamente. Não há mais detector de fala: o microfone escuta 100% do
 áudio e entrega janelas contínuas ao reconhecedor; transcrições repetidas pela
-sobreposição são descartadas. Os códigos 5/6 acionam retry e a última tentativa
-usa o microfone do sistema ao vivo.
+sobreposição são descartadas. Na V33, os códigos 5/6 (silêncio) só repetem da
+tentativa 0 para a 1, ambas com PCM amplificado; nunca abrem o microfone ao vivo
+por uma janela vazia. A tentativa ao vivo fica reservada a ERROR_CLIENT/
+ERROR_AUDIO. O `AudioRecord` permanece aberto entre janelas, respostas e testes;
+o serviço entra em foreground antes de abrir o microfone e não repete
+`startForeground` a cada comando.
 O PCM passa por filtro passa-alta (~77 Hz) e ganho linear até 0,85 com limiter suave
 só nos picos; o AGC nativo fica desligado quando há ganho de software para evitar
 dupla compressão. A verificação de voz compara a maior similaridade entre as amostras
@@ -41,7 +45,11 @@ comandos reconhecidos. “Glia” sozinha, “olá” e conversas comuns são ig
    Ajuste o rigor se houver falso positivo.
 6. Toque no tile da central de controle para ligar a escuta; o tile deve mostrar
    “Ouvindo tudo”, a ilha e o orbe devem ficar roxos (sem modo azul) e o microfone
-   deve permanecer ligado até você desligar o tile.
+   deve permanecer ligado até você desligar o tile. Observe o indicador de
+   microfone por pelo menos 1 minuto, incluindo janelas de silêncio e uma resposta
+   falada: ele não deve piscar entre as janelas. Use “Testar voz” e confirme que o
+   indicador continua aceso durante e depois do teste. Ao desligar pelo tile ou
+   pela notificação, o tile deve voltar para “Desligada”.
 7. Com a tela bloqueada, diga “Que horas são?”; o app deve acender a tela e responder
    na primeira tentativa, sem precisar de “Glia”. O reconhecimento reinicia sozinho
    após cada fala.

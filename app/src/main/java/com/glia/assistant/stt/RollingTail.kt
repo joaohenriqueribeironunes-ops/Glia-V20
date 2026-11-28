@@ -29,4 +29,9 @@ class RollingTail(
     }
 
     fun snapshot(): ByteArray = buffer.copyOf(length)
+
+    /** Descarta a sobreposição acumulada (ex.: depois de uma fala da Glia). */
+    fun clear() {
+        length = 0
+    }
 }
